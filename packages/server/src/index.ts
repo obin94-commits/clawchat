@@ -4,10 +4,12 @@ import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { WsClientEvent, WsServerEvent } from '@clawchat/shared';
+import { MemoryService } from './memory.js';
 
 dotenv.config();
 
 const prisma = new PrismaClient();
+const memory = new MemoryService();
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
@@ -99,6 +101,40 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
+async function handleIncomingMessage(ws: WebSocket, threadId: string, content: string) {
+  const message = await prisma.message.create({
+    data: { threadId, content, role: 'USER', displayType: 'VISIBLE' },
+  });
+
+  await prisma.thread.update({ where: { id: threadId }, data: { updatedAt: new Date() } });
+
+  broadcastToThread(threadId, {
+    type: 'message.new',
+    threadId,
+    payload: { message },
+  } as unknown as WsServerEvent);
+
+  // Retrieve relevant memories and emit chips
+  const chips = await memory.getRelevant(threadId, content);
+  for (const chip of chips) {
+    broadcastToThread(threadId, {
+      type: 'memory_chip',
+      threadId,
+      chip: {
+        id: chip.id,
+        content: chip.content,
+        score: chip.score,
+        category: chip.category,
+      },
+    });
+  }
+
+  // Store message in mem0 for future retrieval (fire-and-forget)
+  memory.store(content, 'default', { threadId, role: 'USER', messageId: message.id }).catch((err) => {
+    console.error('[memory] store failed:', err);
+  });
+}
+
 wss.on('connection', (ws) => {
   let subscribed = false;
 
@@ -126,16 +162,7 @@ wss.on('connection', (ws) => {
           return;
         }
 
-        const message = await prisma.message.create({
-          data: {
-            threadId: event.threadId,
-            content,
-            role: 'USER',
-            displayType: 'VISIBLE',
-          },
-        });
-
-        broadcastToThread(event.threadId, { type: 'message.new', threadId: event.threadId, payload: { message } } as unknown as WsServerEvent);
+        await handleIncomingMessage(ws, event.threadId, content);
         return;
       }
 

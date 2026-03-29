@@ -55,7 +55,10 @@ export interface Agent {
 export interface MemoryChip {
   id: string;
   content: string;
-  createdAt: Date;
+  score: number;
+  category?: string;
+  pinned?: boolean;
+  createdAt?: Date;
 }
 
 export interface CostEntry {
@@ -72,7 +75,11 @@ export type WsClientEvent =
 
 export type WsServerEvent =
   | { type: 'message'; message: Message }
+  | { type: 'message.new'; threadId: string; payload: { message: Message } }
   | { type: 'subscribed'; threadId: string }
   | { type: 'error'; error: string }
-  | { type: 'agent_activity'; ghostMessage: GhostMessage };
-
+  | { type: 'agent_activity'; ghostMessage: GhostMessage }
+  | { type: 'memory_chip'; threadId: string; chip: MemoryChip }
+  | { type: 'agent_started'; threadId: string; agentName: string; runId: string }
+  | { type: 'agent_completed'; threadId: string; agentName: string; runId: string }
+  | { type: 'cost_incurred'; threadId: string; cost: number; agentName?: string };

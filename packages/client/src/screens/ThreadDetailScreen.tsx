@@ -1,9 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { RouteProp, useRoute } from '@react-navigation/native';
+import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Constants from 'expo-constants';
-import type { Message, WsServerEvent } from '@clawchat/shared';
+import type { MemoryChip, Message, WsServerEvent } from '@clawchat/shared';
 import type { RootStackParamList } from '../App';
+import MemoryChipComponent from '../components/MemoryChip';
+import ThreadHeader from '../components/ThreadHeader';
+import AgentStatusBar, { AgentStatus } from '../components/AgentStatusBar';
 
 const SERVER_URL =
   (Constants.expoConfig?.extra as { SERVER_URL?: string } | undefined)?.SERVER_URL ??
@@ -13,13 +17,48 @@ const SERVER_URL =
 const WS_URL = SERVER_URL.replace(/^http/, 'ws');
 
 type ThreadDetailRoute = RouteProp<RootStackParamList, 'ThreadDetail'>;
+type ThreadDetailNav = NativeStackNavigationProp<RootStackParamList, 'ThreadDetail'>;
 
 export default function ThreadDetailScreen() {
   const route = useRoute<ThreadDetailRoute>();
-  const { threadId } = route.params;
+  const navigation = useNavigation<ThreadDetailNav>();
+  const { threadId, title } = route.params;
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
+  const [activeChips, setActiveChips] = useState<MemoryChip[]>([]);
+  const [pinnedChips, setPinnedChips] = useState<MemoryChip[]>([]);
+  const [agentStatus, setAgentStatus] = useState<AgentStatus>({ status: 'idle', cost: 0 });
+  const [totalCost, setTotalCost] = useState(0);
+
   const socketRef = useRef<WebSocket | null>(null);
+  const chipDismissTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  // Context bar: cost on the right
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title,
+      headerRight: () => (
+        <Text style={costStyle}>${totalCost.toFixed(3)}</Text>
+      ),
+    });
+  }, [navigation, title, totalCost]);
+
+  const scheduleChipDismiss = useCallback((chipId: string) => {
+    const existing = chipDismissTimers.current.get(chipId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      setActiveChips((prev) => prev.filter((c) => c.id !== chipId));
+      chipDismissTimers.current.delete(chipId);
+    }, 10_000);
+    chipDismissTimers.current.set(chipId, timer);
+  }, []);
+
+  const dismissAllChips = useCallback(() => {
+    for (const t of chipDismissTimers.current.values()) clearTimeout(t);
+    chipDismissTimers.current.clear();
+    setActiveChips([]);
+  }, []);
 
   const loadMessages = useCallback(async () => {
     try {
@@ -45,11 +84,32 @@ export default function ThreadDetailScreen() {
 
     socket.onmessage = (event) => {
       try {
-        const payload = JSON.parse(event.data) as WsServerEvent;
+        const payload = JSON.parse(event.data as string) as WsServerEvent;
+
         if (payload.type === 'message.new') {
           setMessages((current) => [...current, payload.payload.message]);
         } else if (payload.type === 'message') {
           setMessages((current) => [...current, payload.message]);
+        } else if (payload.type === 'memory_chip') {
+          const chip = payload.chip;
+          setActiveChips((prev) => {
+            if (prev.some((c) => c.id === chip.id)) return prev;
+            return [...prev, chip];
+          });
+          scheduleChipDismiss(chip.id);
+        } else if (payload.type === 'agent_started') {
+          setAgentStatus({
+            status: 'running',
+            agentName: payload.agentName,
+            startedAt: Date.now(),
+            cost: agentStatus.cost,
+          });
+        } else if (payload.type === 'agent_completed') {
+          setAgentStatus((prev) => ({ ...prev, status: 'idle' }));
+        } else if (payload.type === 'cost_incurred') {
+          const added = payload.cost;
+          setTotalCost((prev) => prev + added);
+          setAgentStatus((prev) => ({ ...prev, cost: prev.cost + added }));
         }
       } catch (error) {
         console.error('Failed to parse websocket message', error);
@@ -64,11 +124,14 @@ export default function ThreadDetailScreen() {
       socket.close();
       socketRef.current = null;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 
   const sendMessage = useCallback(async () => {
     const content = input.trim();
     if (!content) return;
+
+    dismissAllChips();
 
     try {
       const socket = socketRef.current;
@@ -87,7 +150,30 @@ export default function ThreadDetailScreen() {
     } catch (error) {
       console.error('Failed to send message', error);
     }
-  }, [input, threadId]);
+  }, [input, threadId, dismissAllChips]);
+
+  const handlePinChip = useCallback((chip: MemoryChip) => {
+    setPinnedChips((prev) => {
+      if (prev.some((c) => c.id === chip.id)) {
+        return prev.filter((c) => c.id !== chip.id);
+      }
+      return [...prev, { ...chip, pinned: true }];
+    });
+    setActiveChips((prev) => prev.filter((c) => c.id !== chip.id));
+  }, []);
+
+  const handleUnpinChip = useCallback((chip: MemoryChip) => {
+    setPinnedChips((prev) => prev.filter((c) => c.id !== chip.id));
+  }, []);
+
+  const handleDismissChip = useCallback((chip: MemoryChip) => {
+    const timer = chipDismissTimers.current.get(chip.id);
+    if (timer) {
+      clearTimeout(timer);
+      chipDismissTimers.current.delete(chip.id);
+    }
+    setActiveChips((prev) => prev.filter((c) => c.id !== chip.id));
+  }, []);
 
   const sortedMessages = useMemo(
     () => [...messages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
@@ -99,6 +185,8 @@ export default function ThreadDetailScreen() {
       style={styles.container}
       behavior={Platform.select({ ios: 'padding', default: undefined })}
     >
+      <ThreadHeader pinnedChips={pinnedChips} onUnpin={handleUnpinChip} />
+
       <FlatList
         style={styles.list}
         data={sortedMessages}
@@ -115,6 +203,22 @@ export default function ThreadDetailScreen() {
         }}
       />
 
+      {activeChips.length > 0 && (
+        <View style={styles.chipsBar}>
+          {activeChips.map((chip) => (
+            <MemoryChipComponent
+              key={chip.id}
+              chip={chip}
+              onPin={handlePinChip}
+              onDelete={handleDismissChip}
+              onDismiss={handleDismissChip}
+            />
+          ))}
+        </View>
+      )}
+
+      <AgentStatusBar agentStatus={agentStatus} />
+
       <View style={styles.composer}>
         <TextInput
           value={input}
@@ -129,6 +233,8 @@ export default function ThreadDetailScreen() {
     </KeyboardAvoidingView>
   );
 }
+
+const costStyle = { fontSize: 13, color: '#999', marginRight: 4 };
 
 const styles = StyleSheet.create({
   container: {
@@ -163,6 +269,16 @@ const styles = StyleSheet.create({
   },
   ghostText: {
     fontSize: 12,
+  },
+  chipsBar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderColor: '#E3F2FD',
+    backgroundColor: '#F8FBFF',
   },
   composer: {
     flexDirection: 'row',
