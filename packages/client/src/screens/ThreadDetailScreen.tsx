@@ -3,11 +3,12 @@ import { FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, 
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Constants from 'expo-constants';
-import type { MemoryChip, Message, WsServerEvent } from '@clawchat/shared';
+import type { AgentRunInfo, MemoryChip, Message, WsServerEvent } from '@clawchat/shared';
 import type { RootStackParamList } from '../App';
 import MemoryChipComponent from '../components/MemoryChip';
 import ThreadHeader from '../components/ThreadHeader';
 import AgentStatusBar, { AgentStatus } from '../components/AgentStatusBar';
+import SubAgentDrawer from '../components/SubAgentDrawer';
 
 const SERVER_URL =
   (Constants.expoConfig?.extra as { SERVER_URL?: string } | undefined)?.SERVER_URL ??
@@ -29,8 +30,11 @@ export default function ThreadDetailScreen() {
   const [activeChips, setActiveChips] = useState<MemoryChip[]>([]);
   const [suggestedChips, setSuggestedChips] = useState<MemoryChip[]>([]);
   const [pinnedChips, setPinnedChips] = useState<MemoryChip[]>([]);
-  const [agentStatus, setAgentStatus] = useState<AgentStatus>({ status: 'idle', cost: 0 });
+  const [agentStatus, setAgentStatus] = useState<AgentStatus>({ status: 'idle', cost: 0, tokens: 0 });
+  const [agents, setAgents] = useState<AgentRunInfo[]>([]);
   const [totalCost, setTotalCost] = useState(0);
+  const [totalTokens, setTotalTokens] = useState(0);
+  const [drawerVisible, setDrawerVisible] = useState(false);
 
   const socketRef = useRef<WebSocket | null>(null);
   const chipDismissTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -72,6 +76,24 @@ export default function ThreadDetailScreen() {
     }
   }, [threadId]);
 
+  // Load persisted cost totals on mount
+  useEffect(() => {
+    fetch(`${SERVER_URL}/threads/${threadId}/cost`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data) {
+          setTotalCost(data.totalCostUsd ?? 0);
+          setTotalTokens(data.totalTokens ?? 0);
+          setAgentStatus((prev) => ({
+            ...prev,
+            cost: data.totalCostUsd ?? 0,
+            tokens: data.totalTokens ?? 0,
+          }));
+        }
+      })
+      .catch(() => {});
+  }, [threadId]);
+
   useEffect(() => {
     void loadMessages();
   }, [loadMessages]);
@@ -100,18 +122,82 @@ export default function ThreadDetailScreen() {
           });
           scheduleChipDismiss(chip.id);
         } else if (payload.type === 'agent_started') {
-          setAgentStatus({
-            status: 'running',
-            agentName: payload.agentName,
-            startedAt: Date.now(),
-            cost: agentStatus.cost,
+          const { agentName, runId } = payload;
+          setAgents((prev) => {
+            if (prev.some((a) => a.runId === runId)) return prev;
+            return [...prev, {
+              runId,
+              agentName,
+              status: 'running',
+              startedAt: Date.now(),
+              cost: 0,
+              tokens: 0,
+            }];
           });
+          setAgentStatus((prev) => ({
+            ...prev,
+            status: 'running',
+            agentName,
+            startedAt: Date.now(),
+          }));
+        } else if (payload.type === 'agent_progress') {
+          const { agentName, runId, action } = payload;
+          setAgents((prev) => prev.map((a) =>
+            a.runId === runId ? { ...a, lastAction: action } : a,
+          ));
+          setAgentStatus((prev) => ({
+            ...prev,
+            status: 'running',
+            agentName,
+          }));
         } else if (payload.type === 'agent_completed') {
-          setAgentStatus((prev) => ({ ...prev, status: 'idle' }));
+          const { runId } = payload;
+          setAgents((prev) => prev.map((a) =>
+            a.runId === runId ? { ...a, status: 'completed', completedAt: Date.now() } : a,
+          ));
+          // Only go idle if no other running agents
+          setAgents((prev) => {
+            const stillRunning = prev.filter((a) => a.status === 'running');
+            if (stillRunning.length === 0) {
+              setAgentStatus((s) => ({ ...s, status: 'idle', error: undefined }));
+            } else {
+              setAgentStatus((s) => ({
+                ...s,
+                status: 'running',
+                agentName: stillRunning[stillRunning.length - 1]?.agentName,
+              }));
+            }
+            return prev;
+          });
+        } else if (payload.type === 'agent_failed') {
+          const { agentName, runId, error } = payload;
+          setAgents((prev) => prev.map((a) =>
+            a.runId === runId ? { ...a, status: 'failed', completedAt: Date.now() } : a,
+          ));
+          setAgentStatus((prev) => ({
+            ...prev,
+            status: 'failed',
+            agentName,
+            error,
+          }));
         } else if (payload.type === 'cost_incurred') {
           const added = payload.cost;
+          const addedTokens = payload.tokens ?? 0;
+          const runId = payload.runId;
           setTotalCost((prev) => prev + added);
-          setAgentStatus((prev) => ({ ...prev, cost: prev.cost + added }));
+          setTotalTokens((prev) => prev + addedTokens);
+          setAgentStatus((prev) => ({
+            ...prev,
+            cost: prev.cost + added,
+            tokens: prev.tokens + addedTokens,
+          }));
+          if (runId) {
+            setAgents((prev) => prev.map((a) =>
+              a.runId === runId
+                ? { ...a, cost: a.cost + added, tokens: a.tokens + addedTokens }
+                : a,
+            ));
+          }
         }
       } catch (error) {
         console.error('Failed to parse websocket message', error);
@@ -244,7 +330,19 @@ export default function ThreadDetailScreen() {
         </View>
       )}
 
-      <AgentStatusBar agentStatus={agentStatus} />
+      <AgentStatusBar
+        agentStatus={agentStatus}
+        agents={agents}
+        onPress={agents.length > 0 || agentStatus.status !== 'idle' ? () => setDrawerVisible(true) : undefined}
+      />
+
+      <SubAgentDrawer
+        visible={drawerVisible}
+        agents={agents}
+        totalTokens={totalTokens}
+        totalCost={totalCost}
+        onClose={() => setDrawerVisible(false)}
+      />
 
       {suggestedChips.length > 0 && (
         <View style={styles.suggestionsBar}>

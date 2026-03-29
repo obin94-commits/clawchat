@@ -52,6 +52,17 @@ export interface Agent {
   type: string;
 }
 
+export interface AgentRunInfo {
+  runId: string;
+  agentName: string;
+  status: 'running' | 'completed' | 'failed';
+  startedAt: number;
+  completedAt?: number;
+  lastAction?: string;
+  cost: number;
+  tokens: number;
+}
+
 export interface MemoryChip {
   id: string;
   content: string;
@@ -81,5 +92,7 @@ export type WsServerEvent =
   | { type: 'agent_activity'; ghostMessage: GhostMessage }
   | { type: 'memory_chip'; threadId: string; chip: MemoryChip }
   | { type: 'agent_started'; threadId: string; agentName: string; runId: string }
+  | { type: 'agent_progress'; threadId: string; agentName: string; runId: string; action: string }
   | { type: 'agent_completed'; threadId: string; agentName: string; runId: string }
-  | { type: 'cost_incurred'; threadId: string; cost: number; agentName?: string };
+  | { type: 'agent_failed'; threadId: string; agentName: string; runId: string; error: string }
+  | { type: 'cost_incurred'; threadId: string; cost: number; tokens?: number; agentName?: string; runId?: string };

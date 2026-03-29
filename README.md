@@ -2,7 +2,7 @@
 
 > iMessage for AI Agents. Open-source messaging layer for agent orchestration.
 
-**Status: Day 2 complete — server running, client screens built**
+**Status: Day 4 complete — agent status bar, cost tracking, sub-agent drawer**
 
 ---
 
@@ -51,9 +51,9 @@ packages/
 |-----|--------|----------------|
 | Day 1 | ✅ Done | pnpm monorepo, Prisma schema, shared types, WS server skeleton, Expo scaffold |
 | Day 2 | ✅ Done | Working Express+WS server, Prisma SQLite, REST endpoints, Expo thread list + chat screens |
-| Day 3 | 🔄 Next | mem0 memory chip integration, OpenClaw bridge wiring |
-| Day 4 | ⏳ | Agent status bar, cost tracking, sub-agent visibility |
-| Day 5 | ⏳ | Auth (Tailscale), polish, internal dogfooding begins |
+| Day 3 | ✅ Done | mem0 memory chip integration, OpenClaw bridge wiring, memory chips interactive |
+| Day 4 | ✅ Done | Agent status bar (live state, sub-agent count, cost+tokens), CostEntry DB, SubAgentDrawer, typed WS events |
+| Day 5 | 🔄 Next | Auth (Tailscale), push notifications, reconnect/sync, SQLite cache, dogfooding |
 
 ---
 

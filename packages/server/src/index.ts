@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { WsClientEvent, WsServerEvent } from '@clawchat/shared';
-import { MemoryService } from './memory.js';
+import { MemoryService } from './memory';
 
 dotenv.config();
 
@@ -26,6 +26,62 @@ const broadcastToThread = (threadId: string, payload: WsServerEvent) => {
     client.send(serialized);
   }
 };
+
+/**
+ * Parse a SYSTEM message content and emit a typed WS event if it matches a
+ * known agent event prefix (agent_started, agent_progress, agent_completed,
+ * agent_failed, cost_incurred).
+ */
+function emitTypedEventFromSystemMessage(threadId: string, content: string): void {
+  const runId = 'system';
+
+  if (content.startsWith('agent_started:')) {
+    const agentName = content.replace('agent_started:', '').trim().split(' ')[0] ?? 'Agent';
+    broadcastToThread(threadId, { type: 'agent_started', threadId, agentName, runId });
+    return;
+  }
+
+  if (content.startsWith('agent_completed:')) {
+    const agentName = content.replace('agent_completed:', '').trim().split(' ')[0] ?? 'Agent';
+    broadcastToThread(threadId, { type: 'agent_completed', threadId, agentName, runId });
+    return;
+  }
+
+  if (content.startsWith('agent_failed:')) {
+    const rest = content.replace('agent_failed:', '').trim();
+    const agentName = rest.split(' ')[0] ?? 'Agent';
+    const error = rest.replace(agentName, '').replace(/^[\s—-]+/, '');
+    broadcastToThread(threadId, { type: 'agent_failed', threadId, agentName, runId, error });
+    return;
+  }
+
+  if (content.startsWith('agent_progress:')) {
+    const rest = content.replace('agent_progress:', '').trim();
+    const agentName = rest.split(' ')[0] ?? 'Agent';
+    const action = rest.replace(agentName, '').replace(/^[\s—-]+/, '');
+    broadcastToThread(threadId, { type: 'agent_progress', threadId, agentName, runId, action });
+    return;
+  }
+
+  if (content.startsWith('cost_incurred:')) {
+    const rest = content.replace('cost_incurred:', '').trim();
+    const parts = rest.split(',').reduce<Record<string, string>>((acc, pair) => {
+      const [k, v] = pair.split('=').map((s) => s.trim());
+      if (k && v) acc[k] = v;
+      return acc;
+    }, {});
+    const cost = parseFloat(parts['cost'] ?? '0') || 0;
+    const tokens = parseInt(parts['tokens'] ?? '0', 10) || 0;
+    const agentName = parts['agent'] ?? undefined;
+
+    // Persist to CostEntry
+    prisma.costEntry.create({
+      data: { threadId, agentId: agentName, tokens, costUsd: cost },
+    }).catch((err) => console.error('[cost] persist failed:', err));
+
+    broadcastToThread(threadId, { type: 'cost_incurred', threadId, cost, tokens, agentName });
+  }
+}
 
 app.get('/memories', async (req, res, next) => {
   try {
@@ -97,6 +153,11 @@ app.post('/threads/:id/messages', async (req, res, next) => {
 
     broadcastToThread(threadId, { type: 'message.new', threadId, payload: { message } } as unknown as WsServerEvent);
 
+    // Emit typed event for SYSTEM messages from the bridge
+    if (role === 'SYSTEM') {
+      emitTypedEventFromSystemMessage(threadId, content);
+    }
+
     // Fire-and-forget: store message in mem0
     memory.addMemory(content, 'robin', { threadId, role, messageId: message.id }).catch((err) => {
       console.error('[memory] addMemory failed:', err);
@@ -107,6 +168,52 @@ app.post('/threads/:id/messages', async (req, res, next) => {
     next(error);
   }
 });
+
+// ─── Cost endpoints ──────────────────────────────────────────────────────────
+
+app.get('/threads/:id/cost', async (req, res, next) => {
+  try {
+    const threadId = req.params.id;
+    const entries = await prisma.costEntry.findMany({
+      where: { threadId },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const totalTokens = entries.reduce((sum, e) => sum + e.tokens, 0);
+    const totalCostUsd = entries.reduce((sum, e) => sum + e.costUsd, 0);
+
+    res.json({ totalTokens, totalCostUsd, entries });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/threads/:id/cost', async (req, res, next) => {
+  try {
+    const threadId = req.params.id;
+    const agentId = typeof req.body?.agentId === 'string' ? req.body.agentId : null;
+    const tokens = typeof req.body?.tokens === 'number' ? req.body.tokens : 0;
+    const costUsd = typeof req.body?.costUsd === 'number' ? req.body.costUsd : 0;
+
+    const entry = await prisma.costEntry.create({
+      data: { threadId, agentId, tokens, costUsd },
+    });
+
+    broadcastToThread(threadId, {
+      type: 'cost_incurred',
+      threadId,
+      cost: costUsd,
+      tokens,
+      agentName: agentId ?? undefined,
+    });
+
+    res.status(201).json(entry);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── Error handler ───────────────────────────────────────────────────────────
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(error);
