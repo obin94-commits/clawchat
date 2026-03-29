@@ -27,6 +27,18 @@ const broadcastToThread = (threadId: string, payload: WsServerEvent) => {
   }
 };
 
+app.get('/memories', async (req, res, next) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    const userId = typeof req.query.userId === 'string' ? req.query.userId : '';
+    if (!q) { res.json([]); return; }
+    const results = await memory.searchMemories(q, userId);
+    res.json(results);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', clients: wss.clients.size });
 });
@@ -84,6 +96,12 @@ app.post('/threads/:id/messages', async (req, res, next) => {
     await prisma.thread.update({ where: { id: threadId }, data: { updatedAt: new Date() } });
 
     broadcastToThread(threadId, { type: 'message.new', threadId, payload: { message } } as unknown as WsServerEvent);
+
+    // Fire-and-forget: store message in mem0
+    memory.addMemory(content, 'robin', { threadId, role, messageId: message.id }).catch((err) => {
+      console.error('[memory] addMemory failed:', err);
+    });
+
     res.status(201).json(message);
   } catch (error) {
     next(error);

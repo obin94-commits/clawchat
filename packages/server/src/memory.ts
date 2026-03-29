@@ -106,10 +106,19 @@ export class MemoryService {
     return id;
   }
 
+  async searchMemories(query: string, userId: string, limit = 5): Promise<MemoryResult[]> {
+    const results = await this.search(query, userId);
+    return results.slice(0, limit);
+  }
+
+  async addMemory(content: string, userId: string, metadata: Record<string, unknown> = {}): Promise<string> {
+    return this.store(content, userId, metadata);
+  }
+
   async getRelevant(_threadId: string, lastMessage: string): Promise<MemoryResult[]> {
     try {
-      const results = await this.search(lastMessage, '');
-      return results.filter((r) => r.score > 0.7).slice(0, 5);
+      const results = await this.searchMemories(lastMessage, '');
+      return results.filter((r) => r.score > 0.7);
     } catch (error) {
       console.error('[memory] getRelevant failed:', error);
       return [];

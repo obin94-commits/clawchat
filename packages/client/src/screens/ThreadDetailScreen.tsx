@@ -27,12 +27,14 @@ export default function ThreadDetailScreen() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [activeChips, setActiveChips] = useState<MemoryChip[]>([]);
+  const [suggestedChips, setSuggestedChips] = useState<MemoryChip[]>([]);
   const [pinnedChips, setPinnedChips] = useState<MemoryChip[]>([]);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>({ status: 'idle', cost: 0 });
   const [totalCost, setTotalCost] = useState(0);
 
   const socketRef = useRef<WebSocket | null>(null);
   const chipDismissTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Context bar: cost on the right
   useLayoutEffect(() => {
@@ -127,6 +129,31 @@ export default function ThreadDetailScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 
+  const handleInputChange = useCallback((text: string) => {
+    setInput(text);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    if (text.trim().length < 2) { setSuggestedChips([]); return; }
+    searchDebounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `${SERVER_URL}/memories?q=${encodeURIComponent(text.trim())}&userId=robin`,
+        );
+        const results = (await res.json()) as Array<MemoryChip & { score: number }>;
+        setSuggestedChips(results.filter((r) => r.score > 0.7));
+      } catch {
+        setSuggestedChips([]);
+      }
+    }, 500);
+  }, []);
+
+  const handleChipTap = useCallback((chip: MemoryChip) => {
+    setInput((prev) => {
+      const trimmed = prev.trim();
+      return trimmed ? `${trimmed} ${chip.content}` : chip.content;
+    });
+    setSuggestedChips([]);
+  }, []);
+
   const sendMessage = useCallback(async () => {
     const content = input.trim();
     if (!content) return;
@@ -219,10 +246,25 @@ export default function ThreadDetailScreen() {
 
       <AgentStatusBar agentStatus={agentStatus} />
 
+      {suggestedChips.length > 0 && (
+        <View style={styles.suggestionsBar}>
+          {suggestedChips.map((chip) => (
+            <MemoryChipComponent
+              key={chip.id}
+              chip={chip}
+              onTap={handleChipTap}
+              onPin={handlePinChip}
+              onDelete={() => setSuggestedChips((prev) => prev.filter((c) => c.id !== chip.id))}
+              onDismiss={() => setSuggestedChips((prev) => prev.filter((c) => c.id !== chip.id))}
+            />
+          ))}
+        </View>
+      )}
+
       <View style={styles.composer}>
         <TextInput
           value={input}
-          onChangeText={setInput}
+          onChangeText={handleInputChange}
           placeholder="Send a message"
           style={styles.input}
         />
@@ -279,6 +321,16 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderColor: '#E3F2FD',
     backgroundColor: '#F8FBFF',
+  },
+  suggestionsBar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#F0F8FF',
+    borderTopWidth: 1,
+    borderColor: '#D0E8FF',
   },
   composer: {
     flexDirection: 'row',
