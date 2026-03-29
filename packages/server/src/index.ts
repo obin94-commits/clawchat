@@ -3,7 +3,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { WebSocketServer, WebSocket } from 'ws';
-import type { MessageType, WsClientEvent, WsServerEvent } from '@clawchat/shared';
+import type { WsClientEvent, WsServerEvent } from '@clawchat/shared';
 
 dotenv.config();
 
@@ -54,7 +54,7 @@ app.get('/threads/:id/messages', async (req, res, next) => {
   try {
     const messages = await prisma.message.findMany({
       where: { threadId: req.params.id },
-      orderBy: { timestamp: 'asc' },
+      orderBy: { createdAt: 'asc' },
     });
     res.json(messages);
   } catch (error) {
@@ -66,7 +66,9 @@ app.post('/threads/:id/messages', async (req, res, next) => {
   try {
     const threadId = req.params.id;
     const content = typeof req.body?.content === 'string' ? req.body.content.trim() : '';
-    const messageType = (req.body?.messageType ?? req.body?.type ?? 'regular') as MessageType;
+    const role = (req.body?.role ?? 'USER') as string;
+    const displayType = (req.body?.displayType ?? 'VISIBLE') as string;
+    const metadata = req.body?.metadata ? JSON.stringify(req.body.metadata) : null;
 
     if (!content) {
       res.status(400).json({ error: 'content is required' });
@@ -74,18 +76,12 @@ app.post('/threads/:id/messages', async (req, res, next) => {
     }
 
     const message = await prisma.message.create({
-      data: {
-        threadId,
-        content,
-        type: messageType,
-        senderId: req.body?.senderId ?? null,
-        agentId: req.body?.agentId,
-        progress: req.body?.progress,
-        cost: req.body?.cost,
-      },
+      data: { threadId, content, role, displayType, metadata },
     });
 
-    broadcastToThread(threadId, { type: 'message', message });
+    await prisma.thread.update({ where: { id: threadId }, data: { updatedAt: new Date() } });
+
+    broadcastToThread(threadId, { type: 'message.new', threadId, payload: { message } } as unknown as WsServerEvent);
     res.status(201).json(message);
   } catch (error) {
     next(error);
@@ -134,11 +130,12 @@ wss.on('connection', (ws) => {
           data: {
             threadId: event.threadId,
             content,
-            type: event.messageType ?? 'regular',
+            role: 'USER',
+            displayType: 'VISIBLE',
           },
         });
 
-        broadcastToThread(event.threadId, { type: 'message', message });
+        broadcastToThread(event.threadId, { type: 'message.new', threadId: event.threadId, payload: { message } } as unknown as WsServerEvent);
         return;
       }
 

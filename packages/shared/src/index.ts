@@ -9,6 +9,9 @@ export interface Thread {
   updatedAt: Date;
 }
 
+export type MessageRole = 'USER' | 'AGENT' | 'SYSTEM' | 'TOOL';
+export type DisplayType = 'VISIBLE' | 'COLLAPSED' | 'HIDDEN';
+
 export type MessageType =
   | 'regular'
   | 'agent_started'
@@ -22,13 +25,25 @@ export type MessageType =
 export interface Message {
   id: MessageId;
   threadId: ThreadId;
+  role: MessageRole;
   content: string;
-  type: MessageType;
-  senderId?: AgentId | null;
-  timestamp: Date;
-  agentId?: AgentId;
-  progress?: number;
-  cost?: number;
+  displayType: DisplayType;
+  metadata?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * GhostMessage — ephemeral in-flight message shown at opacity 0.5 / fontSize 12
+ * while waiting for server confirmation.
+ */
+export interface GhostMessage {
+  localId: string;
+  threadId: ThreadId;
+  role: MessageRole;
+  content: string;
+  displayType: 'VISIBLE';
+  createdAt: string;
 }
 
 export interface Agent {
@@ -61,20 +76,3 @@ export type WsServerEvent =
   | { type: 'error'; error: string }
   | { type: 'agent_activity'; ghostMessage: GhostMessage };
 
-export interface GhostMessage {
-  id: string;
-  threadId: string;
-  subtype:
-    | 'agent_started'
-    | 'agent_completed'
-    | 'agent_failed'
-    | 'agent_progress'
-    | 'memory_updated'
-    | 'memory_searched'
-    | 'cost_incurred';
-  content: string;
-  agentId?: string;
-  progress?: number;
-  cost?: number;
-  timestamp: Date;
-}

@@ -46,7 +46,9 @@ export default function ThreadDetailScreen() {
     socket.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data) as WsServerEvent;
-        if (payload.type === 'message') {
+        if (payload.type === 'message.new') {
+          setMessages((current) => [...current, payload.payload.message]);
+        } else if (payload.type === 'message') {
           setMessages((current) => [...current, payload.message]);
         }
       } catch (error) {
@@ -88,7 +90,7 @@ export default function ThreadDetailScreen() {
   }, [input, threadId]);
 
   const sortedMessages = useMemo(
-    () => [...messages].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
+    () => [...messages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
     [messages],
   );
 
@@ -103,10 +105,10 @@ export default function ThreadDetailScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => {
-          const isGhost = item.type !== 'regular';
+          const isGhost = item.displayType !== 'VISIBLE' || item.role === 'SYSTEM' || item.role === 'TOOL';
           return (
             <View style={[styles.messageBubble, isGhost && styles.ghostBubble]}>
-              <Text style={[styles.messageType, isGhost && styles.ghostText]}>{item.type}</Text>
+              <Text style={[styles.messageRole, isGhost && styles.ghostText]}>{item.role}</Text>
               <Text style={[styles.messageText, isGhost && styles.ghostText]}>{item.content}</Text>
             </View>
           );
@@ -148,7 +150,7 @@ const styles = StyleSheet.create({
   ghostBubble: {
     opacity: 0.5,
   },
-  messageType: {
+  messageRole: {
     fontSize: 11,
     fontWeight: '700',
     color: '#666',
