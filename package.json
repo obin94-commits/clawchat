@@ -1,0 +1,19 @@
+{
+  "name": "clawchat",
+  "version": "1.0.0",
+  "description": "ClawChat - Open-source messaging interface for AI agent orchestration",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r dev",
+    "start": "pnpm -r start"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "eslint": "^8.0.0",
+    "prettier": "^3.0.0"
+  }
+}
