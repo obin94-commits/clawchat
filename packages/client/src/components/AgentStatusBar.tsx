@@ -14,10 +14,11 @@ export interface AgentStatus {
 interface Props {
   agentStatus: AgentStatus;
   agents: AgentRunInfo[];
+  threadName?: string;
   onPress?: () => void;
 }
 
-export default function AgentStatusBar({ agentStatus, agents, onPress }: Props) {
+export default function AgentStatusBar({ agentStatus, agents, threadName, onPress }: Props) {
   const [elapsed, setElapsed] = useState(0);
   const dotOpacity = useRef(new Animated.Value(1)).current;
 
@@ -56,15 +57,17 @@ export default function AgentStatusBar({ agentStatus, agents, onPress }: Props) 
 
   const runningCount = agents.filter((a) => a.status === 'running').length;
 
+  const threadPrefix = threadName ? `${threadName} · ` : '';
+
   let label: string;
   if (isFailed) {
-    label = `${agentStatus.agentName ?? 'Agent'} failed`;
+    label = `${threadPrefix}${agentStatus.agentName ?? 'Agent'} failed`;
     if (agentStatus.error) label += ` — ${agentStatus.error.slice(0, 40)}`;
   } else if (isRunning) {
-    label = `${agentStatus.agentName ?? 'Agent'} (${elapsed}s)`;
+    label = `${threadPrefix}${agentStatus.agentName ?? 'Agent'} (${elapsed}s)`;
     if (runningCount > 1) label += ` +${runningCount - 1} sub-agents`;
   } else {
-    label = 'Agent: idle';
+    label = `${threadPrefix}idle`;
   }
 
   const dotColor = isFailed ? '#FF3B30' : '#007AFF';

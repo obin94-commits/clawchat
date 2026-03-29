@@ -17,6 +17,22 @@ const subscriptions = new Map<WebSocket, string>();
 
 app.use(express.json());
 
+// ─── Auth middleware ──────────────────────────────────────────────────────────
+// If CLAWCHAT_API_KEY is set, require a matching Bearer token on every request.
+// If unset, allow all (dev mode).
+const REQUIRED_API_KEY = process.env.CLAWCHAT_API_KEY ?? '';
+
+app.use((req, res, next) => {
+  if (!REQUIRED_API_KEY) { next(); return; }
+  const auth = req.headers.authorization ?? '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  if (token !== REQUIRED_API_KEY) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  next();
+});
+
 const broadcastToThread = (threadId: string, payload: WsServerEvent) => {
   const serialized = JSON.stringify(payload);
 
@@ -226,6 +242,17 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
+async function emitGhostMessage(threadId: string, content: string): Promise<void> {
+  const message = await prisma.message.create({
+    data: { threadId, content, role: 'SYSTEM', displayType: 'GHOST' },
+  });
+  broadcastToThread(threadId, {
+    type: 'message.new',
+    threadId,
+    payload: { message },
+  } as unknown as WsServerEvent);
+}
+
 async function handleIncomingMessage(ws: WebSocket, threadId: string, content: string) {
   const message = await prisma.message.create({
     data: { threadId, content, role: 'USER', displayType: 'VISIBLE' },
@@ -277,6 +304,10 @@ wss.on('connection', (ws) => {
         subscriptions.set(ws, event.threadId);
         subscribed = true;
         ws.send(JSON.stringify({ type: 'subscribed', threadId: event.threadId } satisfies WsServerEvent));
+        // Ghost message: agent connected
+        emitGhostMessage(event.threadId, 'agent_connected').catch((err) =>
+          console.error('[ghost] connect failed:', err),
+        );
         return;
       }
 
@@ -302,7 +333,13 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
+    const threadId = subscriptions.get(ws);
     subscriptions.delete(ws);
+    if (threadId) {
+      emitGhostMessage(threadId, 'agent_disconnected').catch((err) =>
+        console.error('[ghost] disconnect failed:', err),
+      );
+    }
   });
 });
 

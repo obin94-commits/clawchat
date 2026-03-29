@@ -2,7 +2,7 @@
 
 > iMessage for AI Agents. Open-source messaging layer for agent orchestration.
 
-**Status: Day 4 complete — agent status bar, cost tracking, sub-agent drawer**
+**Status: Day 5 complete — Tailscale auth, cost tracking, ghost messages, dogfooding-ready**
 
 ---
 
@@ -52,8 +52,9 @@ packages/
 | Day 1 | ✅ Done | pnpm monorepo, Prisma schema, shared types, WS server skeleton, Expo scaffold |
 | Day 2 | ✅ Done | Working Express+WS server, Prisma SQLite, REST endpoints, Expo thread list + chat screens |
 | Day 3 | ✅ Done | mem0 memory chip integration, OpenClaw bridge wiring, memory chips interactive |
-| Day 4 | ✅ Done | Agent status bar (live state, sub-agent count, cost+tokens), CostEntry DB, SubAgentDrawer, typed WS events |
-| Day 5 | 🔄 Next | Auth (Tailscale), push notifications, reconnect/sync, SQLite cache, dogfooding |
+| Day 4 | ✅ Done | Agent status bar (live state, sub-agent count, cost+tokens), CostEntry DB, SubAgentDrawer, typed WS events, thread name in status bar |
+| Day 5 | ✅ Done | Tailscale-first auth middleware, .env.example, client config.ts, ghost messages on WS connect/disconnect |
+| Day 6 | 🔄 Next | Push notifications, reconnect/sync, SQLite cache |
 
 ---
 
@@ -74,6 +75,21 @@ Requires:
 - Node 20+
 - pnpm
 - (For memory features) Qdrant running at `localhost:6333`
+
+---
+
+## Running in production (Tailscale)
+
+ClawChat uses a simple Bearer-token auth layer designed for Tailscale mesh deployments.
+
+1. Copy `packages/server/.env.example` → `packages/server/.env`
+2. Set `CLAWCHAT_API_KEY=<random-secret>` in `.env`
+3. Deploy the server behind Tailscale so only your mesh nodes can reach it
+4. Set `EXPO_PUBLIC_API_KEY=<same-secret>` in the client env (or via Expo config `extra.API_KEY`)
+5. Set `EXPO_PUBLIC_SERVER_URL=http://<tailscale-hostname>:3001`
+
+The server will reject any request without a matching `Authorization: Bearer <key>` header.
+If `CLAWCHAT_API_KEY` is unset the server runs in open dev mode (all requests allowed).
 
 ---
 

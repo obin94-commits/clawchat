@@ -333,6 +333,7 @@ export default function ThreadDetailScreen() {
       <AgentStatusBar
         agentStatus={agentStatus}
         agents={agents}
+        threadName={title}
         onPress={agents.length > 0 || agentStatus.status !== 'idle' ? () => setDrawerVisible(true) : undefined}
       />
 
