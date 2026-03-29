@@ -8,27 +8,25 @@ datasource db {
 }
 
 model Thread {
-  id        String   @id @default(uuid())
-  title     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  messages  Message[] @relation("ThreadMessages")
+  id        String    @id @default(cuid())
+  title     String    @default("Untitled")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  messages  Message[]
+
+  @@index([updatedAt])
 }
 
 model Message {
-  id        String   @id @default(uuid())
-  threadId  String
-  thread    Thread   @relation("ThreadMessages", fields: [threadId], references: [id])
-  content   String
-  // We'll store type as a string; could be enum but we'll keep simple.
-  type      String   // regular, agent_started, etc.
-  senderId  String?  // agent id or null
-  timestamp DateTime @default(now())
-  // Optional fields for ghost messages
-  agentId   String?
-  progress  Int?     // 0-100
-  cost      Float?   // for cost_incurred
-  memoryUpdated Boolean? // for memory_updated
-  memorySearched Boolean? // for memory_searched
-  @@index([threadId, timestamp])
+  id          String   @id @default(cuid())
+  threadId    String
+  thread      Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  role        String   @default("USER")   // USER | AGENT | SYSTEM | TOOL
+  content     String
+  displayType String   @default("VISIBLE") // VISIBLE | COLLAPSED | HIDDEN
+  metadata    String?  // JSON string
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([threadId, createdAt])
 }
