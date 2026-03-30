@@ -96,7 +96,7 @@ let threadId: string | null = null;
 let wsConnected = false;
 
 function connectWebSocket(): void {
-  if (!threadId || !ws) return;
+  if (!threadId) return;
   const url = `${CLAWCHAT_WS_URL}?threadId=${encodeURIComponent(threadId)}`;
   ws = new WebSocket(url, {
     headers: CLAWCHAT_API_KEY
