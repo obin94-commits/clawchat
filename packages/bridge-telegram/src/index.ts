@@ -89,6 +89,10 @@ async function postMessage(
 
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 
+bot.on("polling_error", (err) => {
+  console.error("[telegram-bridge] Telegram polling error:", err.message);
+});
+
 // ─── WebSocket client for ClawChat ───────────────────────────────────────────
 
 let ws: WebSocket | null = null;
@@ -98,16 +102,17 @@ let wsConnected = false;
 function connectWebSocket(): void {
   if (!threadId) return;
   const url = `${CLAWCHAT_WS_URL}?threadId=${encodeURIComponent(threadId)}`;
-  ws = new WebSocket(url, {
+  const socket = new WebSocket(url, {
     headers: CLAWCHAT_API_KEY
       ? { Authorization: `Bearer ${CLAWCHAT_API_KEY}` }
       : undefined,
   });
+  ws = socket;
 
-  ws.on("open", () => {
+  socket.on("open", () => {
     console.log("[telegram-bridge] WebSocket connected");
     wsConnected = true;
-    ws!.send(
+    socket.send(
       JSON.stringify({
         type: "subscribe",
         threadId: threadId!,
@@ -115,7 +120,7 @@ function connectWebSocket(): void {
     );
   });
 
-  ws.on("message", (raw) => {
+  socket.on("message", (raw) => {
     try {
       const event = JSON.parse(raw.toString());
       handleWsEvent(event);
@@ -124,13 +129,14 @@ function connectWebSocket(): void {
     }
   });
 
-  ws.on("error", (err) => {
+  socket.on("error", (err) => {
     console.error("[telegram-bridge] WebSocket error:", err.message);
   });
 
-  ws.on("close", () => {
+  socket.on("close", () => {
     console.log("[telegram-bridge] WebSocket closed, reconnecting...");
     wsConnected = false;
+    ws = null;
     setTimeout(connectWebSocket, 3000);
   });
 }
