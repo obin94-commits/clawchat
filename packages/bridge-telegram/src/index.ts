@@ -144,7 +144,7 @@ function sendToTelegram(
   const replyToId = metadata?.replyToMessageId
     ? parseInt(String(metadata.replyToMessageId), 10)
     : undefined;
-  const options: Record<string, unknown> = {};
+  const options: TelegramBot.SendMessageOptions = {};
   if (replyToId) options.reply_to_message_id = replyToId;
 
   bot
@@ -203,6 +203,10 @@ function handleWsEvent(event: unknown): void {
 
   if (evt.type === "message.new" && evt.payload?.message) {
     const msg = evt.payload.message;
+
+    // Don't forward HIDDEN messages to Telegram
+    if (msg.displayType === "HIDDEN") return;
+
     let metadata: Record<string, unknown> | undefined;
     if (msg.metadata) {
       try {
@@ -214,6 +218,10 @@ function handleWsEvent(event: unknown): void {
         metadata = undefined;
       }
     }
+
+    // Don't echo messages that originated from Telegram back to Telegram
+    if (metadata?.source === "telegram") return;
+
     const telegramContent = translateToTelegram(
       msg.content,
       msg.role,
