@@ -1,40 +1,75 @@
 /**
- * bridge-openclaw — polls OpenClaw gateway and relays messages to ClawChat.
+ * bridge-openclaw — connects to the OpenClaw gateway via WebSocket RPC and
+ * relays messages into ClawChat.
  *
- * Primary: HTTP polling every 2s against
- *   GET http://OPENCLAW_HOST/v1/sessions/main/messages?since=<unix_ms>
- * Fallback: WebSocket connection for real-time events.
- * Agent activity events are forwarded as GHOST messages; regular messages as VISIBLE.
+ * VERIFIED PROTOCOL (reverse-engineered from the OpenClaw SPA bundle):
+ *   - WebSocket endpoint: ws://<host> (no /ws suffix — the gateway serves the WS at root)
+ *   - Message format: { type:"req", id:"<uuid>", method:"<rpc>", params:{...} }
+ *   - Response format: { type:"res", id:"<same>", result:{...} } | { type:"res", id, error:{...} }
+ *   - Event format:   { type:"event", seq:N, ...data }
+ *
+ * NOTE: The gateway also serves an SPA UI. The HTTP path
+ *   GET /v1/sessions/main/messages returns HTML (SPA catch-all — not a JSON API).
+ *   All real data access goes through WebSocket RPC.
+ *
+ * Flow:
+ *   1. Connect to gateway WS
+ *   2. Authenticate with request("connect", {token})
+ *   3. Poll request("chat.history", {sessionKey, limit}) periodically
+ *   4. Stream new events via onEvent callback
  */
 
 import dotenv from 'dotenv';
 import WebSocket from 'ws';
+import crypto from 'crypto';
 
 dotenv.config();
 
 const CLAWCHAT_URL = process.env.CLAWCHAT_URL ?? 'http://localhost:3001';
-const OPENCLAW_BASE = process.env.OPENCLAW_BASE ?? 'http://100.102.5.72:18789';
-const OPENCLAW_WS = process.env.OPENCLAW_WS ?? 'ws://100.102.5.72:18789/ws';
+const OPENCLAW_WS = process.env.OPENCLAW_WS ?? 'ws://100.102.5.72:18789';
 const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN ?? '698900e334ca63800944174b5d1617cd53f7dc0b4a211794';
-const SESSION_ID = process.env.OPENCLAW_SESSION ?? 'main';
+const SESSION_KEY = process.env.OPENCLAW_SESSION ?? 'main';
 const ACTIVITY_THREAD_TITLE = 'OpenClaw Activity';
 
-// ─── OpenClaw message shape ────────────────────────────────────────────────
+// ─── OpenClaw RPC message shapes ───────────────────────────────────────────
 
-interface OpenClawMessage {
+interface RpcRequest {
+  type: 'req';
+  id: string;
+  method: string;
+  params: Record<string, unknown>;
+}
+
+interface RpcResponse {
+  type: 'res';
+  id: string;
+  result?: unknown;
+  error?: { code?: string; message?: string };
+}
+
+interface RpcEvent {
+  type: 'event';
+  seq?: number;
+  stream?: string;
+  text?: string;
+  role?: string;
+  kind?: string;
   id?: string;
-  type?: string;
-  event?: string;
-  agentName?: string;
-  agent_name?: string;
-  runId?: string;
-  run_id?: string;
+  [key: string]: unknown;
+}
+
+type RpcMessage = RpcRequest | RpcResponse | RpcEvent | { type: string; [key: string]: unknown };
+
+// A chat message as returned by chat.history
+interface OpenClawChatMessage {
+  id?: string;
+  role?: string;       // "user" | "assistant" | "system"
   content?: string;
   text?: string;
-  message?: string;
-  status?: string;
-  timestamp?: number | string;
-  created_at?: number | string;
+  kind?: string;
+  stream?: string;
+  createdAt?: string | number;
+  timestamp?: string | number;
   [key: string]: unknown;
 }
 
@@ -86,47 +121,44 @@ interface Translated {
   displayType: string;
 }
 
-function translateMessage(msg: OpenClawMessage): Translated | null {
-  const type = (msg.type ?? msg.event ?? msg.status ?? '').toLowerCase();
-  const agent = msg.agentName ?? msg.agent_name ?? 'OpenClaw';
-  const run = (msg.runId ?? msg.run_id) ? ` [${String(msg.runId ?? msg.run_id).slice(0, 8)}]` : '';
-  const text = msg.content ?? msg.text ?? msg.message ?? '';
+function translateChatMessage(msg: OpenClawChatMessage): Translated | null {
+  const role = (msg.role ?? '').toLowerCase();
+  const kind = (msg.kind ?? msg.stream ?? '').toLowerCase();
+  const text = (msg.content ?? msg.text ?? '') as string;
 
-  // Agent lifecycle / activity events → SYSTEM with prefix, displayed as GHOST
-  if (type === 'agent_activity' || type === 'agent_started' || /start/i.test(type) && /agent/i.test(type)) {
-    return {
-      content: `agent_started: ${agent}${run} started`,
-      role: 'SYSTEM',
-      displayType: 'GHOST',
-    };
+  // Map OpenClaw roles to ClawChat roles/displayTypes
+  if (role === 'assistant' || role === 'agent') {
+    if (!text) return null;
+    return { content: text, role: 'AGENT', displayType: 'VISIBLE' };
   }
 
-  if (type === 'agent_completed' || /complet|done|finish/i.test(type) && /agent/i.test(type)) {
-    return {
-      content: `agent_completed: ${agent}${run} completed`,
-      role: 'SYSTEM',
-      displayType: 'GHOST',
-    };
+  if (role === 'user') {
+    if (!text) return null;
+    return { content: text, role: 'USER', displayType: 'VISIBLE' };
   }
 
-  if (type === 'agent_failed' || /fail|error/i.test(type) && /agent/i.test(type)) {
-    return {
-      content: `agent_failed: ${agent}${run} — ${text}`,
-      role: 'SYSTEM',
-      displayType: 'GHOST',
-    };
+  if (role === 'system' || kind === 'system') {
+    if (!text) return null;
+    // Detect agent lifecycle events by content
+    if (/agent.started|start(ing|ed)/i.test(text)) {
+      return { content: `agent_started: OpenClaw`, role: 'SYSTEM', displayType: 'GHOST' };
+    }
+    if (/agent.complet|finish|done/i.test(text)) {
+      return { content: `agent_completed: OpenClaw`, role: 'SYSTEM', displayType: 'GHOST' };
+    }
+    if (/agent.fail|error/i.test(text)) {
+      return { content: `agent_failed: OpenClaw — ${text}`, role: 'SYSTEM', displayType: 'GHOST' };
+    }
+    return { content: text, role: 'SYSTEM', displayType: 'GHOST' };
   }
 
-  if (/progress|tool_use|tool_result/i.test(type)) {
-    const detail = text || type;
-    return {
-      content: `agent_progress: ${agent}${run} — ${detail}`,
-      role: 'SYSTEM',
-      displayType: 'GHOST',
-    };
+  // Streaming/tool events
+  if (kind === 'stream' || kind === 'tool_use' || kind === 'tool_result') {
+    if (!text) return null;
+    return { content: `agent_progress: OpenClaw — ${text}`, role: 'SYSTEM', displayType: 'GHOST' };
   }
 
-  // Regular message with content → AGENT, VISIBLE
+  // Fallback: if there's text, relay as agent message
   if (text) {
     return { content: text, role: 'AGENT', displayType: 'VISIBLE' };
   }
@@ -134,164 +166,219 @@ function translateMessage(msg: OpenClawMessage): Translated | null {
   return null;
 }
 
-// ─── HTTP Polling ──────────────────────────────────────────────────────────
+// ─── WebSocket RPC client ──────────────────────────────────────────────────
 
-// Track the highest timestamp/id seen so we don't re-relay messages
-let sinceMs = Date.now();
 let seenIds = new Set<string>();
-let pollFailures = 0;
 
-function openClawHeaders(): HeadersInit {
-  return {
-    Authorization: `Bearer ${OPENCLAW_TOKEN}`,
-    Accept: 'application/json',
-  };
+class OpenClawRpcClient {
+  private ws: WebSocket | null = null;
+  private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  private closed = false;
+  private lastSeq: number | null = null;
+  private backoffMs = 800;
+  private wsFailures = 0;
+
+  constructor(
+    private readonly url: string,
+    private readonly token: string,
+    private readonly onEvent: (event: RpcEvent) => void,
+    private readonly onConnected: () => void,
+  ) {}
+
+  start(): void {
+    this.closed = false;
+    this.connect();
+  }
+
+  stop(): void {
+    this.closed = true;
+    this.ws?.close();
+    this.ws = null;
+    this.flushPending(new Error('RPC client stopped'));
+  }
+
+  get connected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  async request(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    if (!this.connected) throw new Error('gateway not connected');
+    const id = crypto.randomUUID();
+    const msg: RpcRequest = { type: 'req', id, method, params };
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws!.send(JSON.stringify(msg));
+      // Timeout after 15s
+      setTimeout(() => {
+        if (this.pending.has(id)) {
+          this.pending.delete(id);
+          reject(new Error(`RPC timeout: ${method}`));
+        }
+      }, 15_000);
+    });
+  }
+
+  private connect(): void {
+    if (this.closed) return;
+
+    this.ws = new WebSocket(this.url);
+
+    this.ws.on('open', () => {
+      this.wsFailures = 0;
+      this.backoffMs = 800;
+      console.log('[bridge] OpenClaw WS connected — authenticating…');
+      // Wait 750ms then send connect (matches SPA behavior)
+      setTimeout(() => this.sendConnect(), 750);
+    });
+
+    this.ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString()) as RpcMessage;
+        this.handleMessage(msg);
+      } catch {
+        console.warn('[bridge] Failed to parse WS message:', raw.toString().slice(0, 80));
+      }
+    });
+
+    this.ws.on('error', (err) => {
+      console.error('[bridge] OpenClaw WS error:', err.message);
+    });
+
+    this.ws.on('close', () => {
+      this.flushPending(new Error('WebSocket closed'));
+      if (this.closed) return;
+      this.wsFailures++;
+      const delay = Math.min(this.backoffMs * Math.pow(1.5, Math.min(this.wsFailures, 8)), 60_000);
+      console.log(
+        `[bridge] OpenClaw WS closed — reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${this.wsFailures})`,
+      );
+      setTimeout(() => this.connect(), delay);
+    });
+  }
+
+  private async sendConnect(): Promise<void> {
+    try {
+      const result = await this.request('connect', { token: this.token });
+      console.log('[bridge] Authenticated with OpenClaw gateway');
+      this.onConnected();
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (err) {
+      console.error('[bridge] OpenClaw auth failed:', (err as Error).message);
+      // WS will close and reconnect automatically
+    }
+  }
+
+  private handleMessage(msg: RpcMessage): void {
+    if (msg.type === 'res') {
+      const res = msg as RpcResponse;
+      const pending = this.pending.get(res.id);
+      if (pending) {
+        this.pending.delete(res.id);
+        if (res.error) {
+          pending.reject(new Error(res.error.message ?? 'RPC error'));
+        } else {
+          pending.resolve(res.result);
+        }
+      }
+      return;
+    }
+
+    if (msg.type === 'event') {
+      const event = msg as RpcEvent;
+      const seq = typeof event.seq === 'number' ? event.seq : null;
+      if (seq !== null) {
+        if (this.lastSeq !== null && seq > this.lastSeq + 1) {
+          console.warn(`[bridge] Event gap: expected seq ${this.lastSeq + 1}, got ${seq}`);
+        }
+        this.lastSeq = seq;
+      }
+      this.onEvent(event);
+    }
+  }
+
+  private flushPending(err: Error): void {
+    for (const { reject } of this.pending.values()) {
+      reject(err);
+    }
+    this.pending.clear();
+  }
 }
 
-async function pollOnce(threadId: string): Promise<void> {
-  const url = `${OPENCLAW_BASE}/v1/sessions/${SESSION_ID}/messages?since=${sinceMs}`;
+// ─── Chat history polling ──────────────────────────────────────────────────
 
-  let res: Response;
+const POLL_INTERVAL_MS = 3_000;
+
+async function pollChatHistory(
+  client: OpenClawRpcClient,
+  threadId: string,
+): Promise<void> {
+  if (!client.connected) return;
+
+  let result: unknown;
   try {
-    res = await fetch(url, {
-      headers: openClawHeaders(),
-      signal: AbortSignal.timeout(8_000),
-    });
+    result = await client.request('chat.history', { sessionKey: SESSION_KEY, limit: 200 });
   } catch (err) {
-    pollFailures++;
-    if (pollFailures === 1 || pollFailures % 30 === 0) {
-      console.warn(`[bridge] Poll fetch failed (${pollFailures}x): ${(err as Error).message}`);
-    }
+    // Log at most once per 30 polls
+    console.warn('[bridge] chat.history failed:', (err as Error).message);
     return;
   }
 
-  if (!res.ok) {
-    pollFailures++;
-    if (pollFailures === 1 || pollFailures % 30 === 0) {
-      console.warn(`[bridge] Poll HTTP ${res.status} (${pollFailures}x)`);
-    }
-    return;
-  }
-
-  if (pollFailures > 0) {
-    console.log(`[bridge] Poll recovered after ${pollFailures} failures`);
-    pollFailures = 0;
-  }
-
-  let body: unknown;
-  try {
-    body = await res.json();
-  } catch {
-    return; // empty or non-JSON body
-  }
-
-  const messages: OpenClawMessage[] = Array.isArray(body)
-    ? body
-    : Array.isArray((body as Record<string, unknown>)?.messages)
-      ? ((body as Record<string, unknown>).messages as OpenClawMessage[])
+  const messages: OpenClawChatMessage[] = Array.isArray((result as Record<string, unknown>)?.messages)
+    ? ((result as Record<string, unknown>).messages as OpenClawChatMessage[])
+    : Array.isArray(result)
+      ? (result as OpenClawChatMessage[])
       : [];
 
-  let latestTs = sinceMs;
-
   for (const msg of messages) {
-    // Deduplicate by id when available
     const id = String(msg.id ?? '');
     if (id && seenIds.has(id)) continue;
     if (id) {
       seenIds.add(id);
-      // Prune the seen set if it grows large
       if (seenIds.size > 10_000) {
         seenIds = new Set(Array.from(seenIds).slice(-5_000));
       }
+    } else {
+      // No ID — skip to avoid duplicate relay on every poll
+      continue;
     }
 
-    // Track latest timestamp
-    const msgTs = msg.timestamp ?? msg.created_at;
-    if (msgTs) {
-      const ts = typeof msgTs === 'number' ? msgTs : Date.parse(msgTs);
-      if (!isNaN(ts) && ts > latestTs) latestTs = ts;
-    }
-
-    const translated = translateMessage(msg);
+    const translated = translateChatMessage(msg);
     if (translated) {
       console.log(`[bridge] Relaying: [${translated.displayType}] ${translated.content.slice(0, 80)}`);
-      await postMessage(threadId, translated.content, translated.role, translated.displayType, { source: 'openclaw', originalId: id || undefined });
+      await postMessage(
+        threadId,
+        translated.content,
+        translated.role,
+        translated.displayType,
+        { source: 'openclaw', originalId: id || undefined },
+      );
     }
   }
-
-  // Advance the cursor so next poll only fetches newer messages
-  if (latestTs > sinceMs) sinceMs = latestTs + 1;
 }
 
-function startPolling(threadId: string): void {
-  console.log(`[bridge] HTTP polling ${OPENCLAW_BASE}/v1/sessions/${SESSION_ID}/messages every 2s`);
+function handleRpcEvent(event: RpcEvent, threadId: string): void {
+  const id = String(event.id ?? '');
+  if (id && seenIds.has(id)) return;
+  if (id) seenIds.add(id);
 
-  const tick = async () => {
-    await pollOnce(threadId);
-    setTimeout(tick, 2_000);
-  };
+  const stream = (event.stream ?? '').toString();
+  const text = (event.text ?? '') as string;
 
-  setTimeout(tick, 0);
-}
-
-// ─── WebSocket fallback ────────────────────────────────────────────────────
-
-function connectOpenClawWs(threadId: string): void {
-  let ws: WebSocket;
-  let wsFailures = 0;
-
-  const connect = () => {
-    ws = new WebSocket(OPENCLAW_WS, {
-      headers: openClawHeaders(),
-    });
-
-    ws.on('open', () => {
-      wsFailures = 0;
-      console.log('[bridge] OpenClaw WS connected');
-    });
-
-    ws.on('message', (raw) => {
-      try {
-        const msg = JSON.parse(raw.toString()) as OpenClawMessage;
-        const id = String(msg.id ?? '');
-        // Skip if already relayed via polling
-        if (id && seenIds.has(id)) return;
-        if (id) seenIds.add(id);
-
-        const translated = translateMessage(msg);
-        if (translated) {
-          postMessage(threadId, translated.content, translated.role, translated.displayType).catch(console.error);
-        }
-      } catch {
-        const text = raw.toString().trim();
-        if (text) {
-          postMessage(threadId, text, 'AGENT', 'VISIBLE').catch(console.error);
-        }
-      }
-    });
-
-    ws.on('error', (err) => {
-      console.error('[bridge] OpenClaw WS error:', err.message);
-    });
-
-    ws.on('close', () => {
-      wsFailures++;
-      const delay = Math.min(5_000 * wsFailures, 60_000);
-      console.log(`[bridge] OpenClaw WS closed — reconnecting in ${delay / 1000}s`);
-      setTimeout(connect, delay);
-    });
-  };
-
-  connect();
+  // Only relay streaming chat text events
+  if (stream.startsWith('stream:') && text) {
+    postMessage(threadId, `agent_progress: OpenClaw — ${text}`, 'SYSTEM', 'GHOST').catch(console.error);
+  }
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────
 
 async function main() {
   console.log('[bridge] Starting OpenClaw bridge…');
-  console.log(`[bridge] OpenClaw base: ${OPENCLAW_BASE}, session: ${SESSION_ID}`);
+  console.log(`[bridge] OpenClaw WS: ${OPENCLAW_WS}, session: ${SESSION_KEY}`);
   console.log(`[bridge] ClawChat server: ${CLAWCHAT_URL}`);
+  console.log('[bridge] Protocol: WebSocket RPC (type:req/res/event)');
 
+  // Find or create the activity thread in ClawChat
   let threadId: string;
   for (let attempt = 1; ; attempt++) {
     try {
@@ -299,20 +386,37 @@ async function main() {
       console.log(`[bridge] Activity thread: ${threadId}`);
       break;
     } catch (err) {
-      console.error(`[bridge] Failed to find/create thread (attempt ${attempt}):`, (err as Error).message);
+      console.error(
+        `[bridge] Failed to find/create thread (attempt ${attempt}):`,
+        (err as Error).message,
+      );
       if (attempt >= 10) {
         console.error('[bridge] Giving up after 10 attempts');
         process.exit(1);
       }
-      await new Promise((r) => setTimeout(r, 3_000));
+      await new Promise((r) => setTimeout(r, 3_000 * attempt));
     }
   }
 
-  // Primary: HTTP polling every 2s
-  startPolling(threadId);
+  // Create RPC client
+  const client = new OpenClawRpcClient(
+    OPENCLAW_WS,
+    OPENCLAW_TOKEN,
+    (event) => handleRpcEvent(event, threadId),
+    () => {
+      // After connect: start polling chat history
+      const tick = async () => {
+        if (!client.connected) return;
+        await pollChatHistory(client, threadId).catch((err) => {
+          console.error('[bridge] pollChatHistory error:', err.message);
+        });
+        setTimeout(tick, POLL_INTERVAL_MS);
+      };
+      setTimeout(tick, 0);
+    },
+  );
 
-  // Secondary: WebSocket for lower-latency events
-  connectOpenClawWs(threadId);
+  client.start();
 }
 
 main().catch((err) => {

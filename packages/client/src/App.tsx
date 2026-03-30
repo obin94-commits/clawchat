@@ -7,7 +7,12 @@ import ThreadDetailScreen from './screens/ThreadDetailScreen';
 
 export type RootStackParamList = {
   ThreadList: undefined;
-  ThreadDetail: { threadId: string; title: string };
+  ThreadDetail: {
+    threadId: string;
+    title: string;
+    parentThreadId?: string;
+    branchedFromMessageId?: string;
+  };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();

@@ -44,9 +44,21 @@ export default function ThreadListScreen() {
         ListEmptyComponent={<Text style={styles.empty}>No threads yet.</Text>}
         renderItem={({ item }) => (
           <Pressable
-            onPress={() => navigation.navigate('ThreadDetail', { threadId: item.id, title: item.title })}
+            onPress={() =>
+              navigation.navigate('ThreadDetail', {
+                threadId: item.id,
+                title: item.title,
+                parentThreadId: item.parentThreadId ?? undefined,
+                branchedFromMessageId: item.branchedFromMessageId ?? undefined,
+              })
+            }
             style={styles.threadCard}
           >
+            {item.parentThreadId && (
+              <View style={styles.branchBadge}>
+                <Text style={styles.branchBadgeText}>⤷ branch</Text>
+              </View>
+            )}
             <Text style={styles.threadTitle}>{item.title}</Text>
             <Text style={styles.threadMeta}>{new Date(item.updatedAt).toLocaleString()}</Text>
           </Pressable>
@@ -68,6 +80,19 @@ const styles = StyleSheet.create({
     borderColor: '#ddd',
     borderRadius: 12,
     marginBottom: 12,
+  },
+  branchBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#EEF2FF',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginBottom: 6,
+  },
+  branchBadgeText: {
+    fontSize: 11,
+    color: '#6366F1',
+    fontWeight: '600',
   },
   threadTitle: {
     fontSize: 16,

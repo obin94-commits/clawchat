@@ -5,12 +5,14 @@ export type AgentId = string;
 export interface Thread {
   id: ThreadId;
   title: string;
+  parentThreadId?: string | null;
+  branchedFromMessageId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export type MessageRole = 'USER' | 'AGENT' | 'SYSTEM' | 'TOOL';
-export type DisplayType = 'VISIBLE' | 'COLLAPSED' | 'HIDDEN';
+export type DisplayType = 'VISIBLE' | 'COLLAPSED' | 'HIDDEN' | 'GHOST';
 
 export type MessageType =
   | 'regular'
@@ -63,6 +65,7 @@ export interface AgentRunInfo {
   tokens: number;
 }
 
+/** In-flight chip from WS memory_chip event (has similarity score) */
 export interface MemoryChip {
   id: string;
   content: string;
@@ -70,6 +73,16 @@ export interface MemoryChip {
   category?: string;
   pinned?: boolean;
   createdAt?: Date;
+}
+
+/** Persisted memory chip stored in the DB */
+export interface PersistedMemoryChip {
+  id: string;
+  threadId: string;
+  text: string;
+  metadata?: string | null;
+  pinned: boolean;
+  createdAt: string;
 }
 
 export interface CostEntry {
@@ -82,7 +95,8 @@ export interface CostEntry {
 
 export type WsClientEvent =
   | { type: 'subscribe'; threadId: string }
-  | { type: 'send_message'; threadId: string; content: string; messageType?: MessageType };
+  | { type: 'send_message'; threadId: string; content: string; messageType?: MessageType }
+  | { type: 'thread.navigate'; threadId: string };
 
 export type WsServerEvent =
   | { type: 'message'; message: Message }
@@ -91,8 +105,10 @@ export type WsServerEvent =
   | { type: 'error'; error: string }
   | { type: 'agent_activity'; ghostMessage: GhostMessage }
   | { type: 'memory_chip'; threadId: string; chip: MemoryChip }
+  | { type: 'memory_chip.saved'; threadId: string; chip: PersistedMemoryChip }
   | { type: 'agent_started'; threadId: string; agentName: string; runId: string }
   | { type: 'agent_progress'; threadId: string; agentName: string; runId: string; action: string }
   | { type: 'agent_completed'; threadId: string; agentName: string; runId: string }
   | { type: 'agent_failed'; threadId: string; agentName: string; runId: string; error: string }
-  | { type: 'cost_incurred'; threadId: string; cost: number; tokens?: number; agentName?: string; runId?: string };
+  | { type: 'cost_incurred'; threadId: string; cost: number; tokens?: number; agentName?: string; runId?: string }
+  | { type: 'thread.branch'; parentThreadId: string; childThread: Thread; branchedFromMessageId: string };

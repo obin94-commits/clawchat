@@ -3,19 +3,25 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Thread {
-  id          String       @id @default(cuid())
-  title       String       @default("Untitled")
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  messages    Message[]
-  costEntries CostEntry[]
+  id                    String       @id @default(cuid())
+  title                 String       @default("Untitled")
+  parentThreadId        String?
+  branchedFromMessageId String?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  messages              Message[]
+  costEntries           CostEntry[]
+  memoryChips           MemoryChip[]
+  parentThread          Thread?      @relation("ThreadBranches", fields: [parentThreadId], references: [id])
+  childThreads          Thread[]     @relation("ThreadBranches")
 
   @@index([updatedAt])
+  @@index([parentThreadId])
 }
 
 model CostEntry {
@@ -36,10 +42,22 @@ model Message {
   thread      Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
   role        String   @default("USER")   // USER | AGENT | SYSTEM | TOOL
   content     String
-  displayType String   @default("VISIBLE") // VISIBLE | COLLAPSED | HIDDEN
+  displayType String   @default("VISIBLE") // VISIBLE | COLLAPSED | HIDDEN | GHOST
   metadata    String?  // JSON string
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([threadId, createdAt])
+}
+
+model MemoryChip {
+  id        String   @id @default(cuid())
+  threadId  String
+  thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  text      String
+  metadata  String?  // JSON string
+  pinned    Boolean  @default(false)
+  createdAt DateTime @default(now())
 
   @@index([threadId, createdAt])
 }

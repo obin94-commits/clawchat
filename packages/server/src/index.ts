@@ -3,7 +3,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { WebSocketServer, WebSocket } from 'ws';
-import type { WsClientEvent, WsServerEvent } from '@clawchat/shared';
+import type { PersistedMemoryChip, Thread, WsClientEvent, WsServerEvent } from '@clawchat/shared';
 import { MemoryService } from './memory';
 
 dotenv.config();
@@ -18,8 +18,6 @@ const subscriptions = new Map<WebSocket, string>();
 app.use(express.json());
 
 // ─── Auth middleware ──────────────────────────────────────────────────────────
-// If CLAWCHAT_API_KEY is set, require a matching Bearer token on every request.
-// If unset, allow all (dev mode).
 const REQUIRED_API_KEY = process.env.CLAWCHAT_API_KEY ?? '';
 
 app.use((req, res, next) => {
@@ -35,7 +33,6 @@ app.use((req, res, next) => {
 
 const broadcastToThread = (threadId: string, payload: WsServerEvent) => {
   const serialized = JSON.stringify(payload);
-
   for (const client of wss.clients) {
     if (client.readyState !== WebSocket.OPEN) continue;
     if (subscriptions.get(client) !== threadId) continue;
@@ -44,9 +41,7 @@ const broadcastToThread = (threadId: string, payload: WsServerEvent) => {
 };
 
 /**
- * Parse a SYSTEM message content and emit a typed WS event if it matches a
- * known agent event prefix (agent_started, agent_progress, agent_completed,
- * agent_failed, cost_incurred).
+ * Parse a SYSTEM message and emit a typed WS event if it matches a known prefix.
  */
 function emitTypedEventFromSystemMessage(threadId: string, content: string): void {
   const runId = 'system';
@@ -90,7 +85,6 @@ function emitTypedEventFromSystemMessage(threadId: string, content: string): voi
     const tokens = parseInt(parts['tokens'] ?? '0', 10) || 0;
     const agentName = parts['agent'] ?? undefined;
 
-    // Persist to CostEntry
     prisma.costEntry.create({
       data: { threadId, agentId: agentName, tokens, costUsd: cost },
     }).catch((err) => console.error('[cost] persist failed:', err));
@@ -98,6 +92,53 @@ function emitTypedEventFromSystemMessage(threadId: string, content: string): voi
     broadcastToThread(threadId, { type: 'cost_incurred', threadId, cost, tokens, agentName });
   }
 }
+
+// ─── /remember handling ───────────────────────────────────────────────────────
+
+async function handleRememberCommand(
+  threadId: string,
+  messageId: string,
+  content: string,
+): Promise<void> {
+  const text = content.replace(/^\/remember\s+/i, '').trim();
+  if (!text) return;
+
+  const chip = await prisma.memoryChip.create({
+    data: { threadId, text, metadata: JSON.stringify({ sourceMessageId: messageId }) },
+  });
+
+  // Also store in mem0 vector DB
+  memory.addMemory(text, 'robin', { threadId, messageId, type: 'explicit' }).catch((err) => {
+    console.error('[memory] addMemory failed for /remember:', err);
+  });
+
+  broadcastToThread(threadId, {
+    type: 'memory_chip.saved',
+    threadId,
+    chip: chipToDto(chip),
+  });
+}
+
+function chipToDto(chip: {
+  id: string; threadId: string; text: string; metadata: string | null; pinned: boolean; createdAt: Date;
+}): PersistedMemoryChip {
+  return {
+    id: chip.id,
+    threadId: chip.threadId,
+    text: chip.text,
+    metadata: chip.metadata,
+    pinned: chip.pinned,
+    createdAt: chip.createdAt.toISOString(),
+  };
+}
+
+// ─── Health ───────────────────────────────────────────────────────────────────
+
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', clients: wss.clients.size });
+});
+
+// ─── Memories (global search) ─────────────────────────────────────────────────
 
 app.get('/memories', async (req, res, next) => {
   try {
@@ -111,9 +152,7 @@ app.get('/memories', async (req, res, next) => {
   }
 });
 
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', clients: wss.clients.size });
-});
+// ─── Threads ──────────────────────────────────────────────────────────────────
 
 app.get('/threads', async (_req, res, next) => {
   try {
@@ -135,6 +174,59 @@ app.post('/threads', async (req, res, next) => {
     next(error);
   }
 });
+
+// ─── Thread branching ─────────────────────────────────────────────────────────
+
+app.post('/threads/:id/branch', async (req, res, next) => {
+  try {
+    const parentThreadId = req.params.id;
+    const messageId = typeof req.body?.messageId === 'string' ? req.body.messageId : null;
+    const titleOverride = typeof req.body?.title === 'string' && req.body.title.trim()
+      ? req.body.title.trim()
+      : null;
+
+    if (!messageId) {
+      res.status(400).json({ error: 'messageId is required' });
+      return;
+    }
+
+    // Verify the message belongs to this thread
+    const sourceMessage = await prisma.message.findFirst({
+      where: { id: messageId, threadId: parentThreadId },
+    });
+    if (!sourceMessage) {
+      res.status(404).json({ error: 'Message not found in this thread' });
+      return;
+    }
+
+    const parentThread = await prisma.thread.findUnique({ where: { id: parentThreadId } });
+
+    const childTitle = titleOverride ?? `Branch: ${(parentThread?.title ?? 'Thread').slice(0, 40)}`;
+
+    // Create the child thread
+    const childThread = await prisma.thread.create({
+      data: {
+        title: childTitle,
+        parentThreadId,
+        branchedFromMessageId: messageId,
+      },
+    });
+
+    // Broadcast to anyone subscribed to the parent thread
+    broadcastToThread(parentThreadId, {
+      type: 'thread.branch',
+      parentThreadId,
+      childThread: childThread as unknown as Thread,
+      branchedFromMessageId: messageId,
+    });
+
+    res.status(201).json(childThread);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── Messages ────────────────────────────────────────────────────────────────
 
 app.get('/threads/:id/messages', async (req, res, next) => {
   try {
@@ -169,9 +261,15 @@ app.post('/threads/:id/messages', async (req, res, next) => {
 
     broadcastToThread(threadId, { type: 'message.new', threadId, payload: { message } } as unknown as WsServerEvent);
 
-    // Emit typed event for SYSTEM messages from the bridge
     if (role === 'SYSTEM') {
       emitTypedEventFromSystemMessage(threadId, content);
+    }
+
+    // Handle /remember command
+    if (/^\/remember\s+/i.test(content)) {
+      handleRememberCommand(threadId, message.id, content).catch((err) => {
+        console.error('[remember] failed:', err);
+      });
     }
 
     // Fire-and-forget: store message in mem0
@@ -229,6 +327,78 @@ app.post('/threads/:id/cost', async (req, res, next) => {
   }
 });
 
+// ─── Memory chip CRUD ─────────────────────────────────────────────────────────
+
+app.get('/threads/:id/memories', async (req, res, next) => {
+  try {
+    const chips = await prisma.memoryChip.findMany({
+      where: { threadId: req.params.id },
+      orderBy: [{ pinned: 'desc' }, { createdAt: 'desc' }],
+    });
+    res.json(chips.map(chipToDto));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/threads/:id/memories', async (req, res, next) => {
+  try {
+    const threadId = req.params.id;
+    const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+    if (!text) {
+      res.status(400).json({ error: 'text is required' });
+      return;
+    }
+    const metadata = req.body?.metadata ? JSON.stringify(req.body.metadata) : null;
+
+    const chip = await prisma.memoryChip.create({
+      data: { threadId, text, metadata },
+    });
+
+    // Also push to mem0
+    memory.addMemory(text, 'robin', { threadId, type: 'explicit' }).catch((err) => {
+      console.error('[memory] addMemory for chip failed:', err);
+    });
+
+    broadcastToThread(threadId, { type: 'memory_chip.saved', threadId, chip: chipToDto(chip) });
+    res.status(201).json(chipToDto(chip));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/threads/:id/memories/:chipId', async (req, res, next) => {
+  try {
+    const { id: threadId, chipId } = req.params;
+    const updates: { text?: string; pinned?: boolean } = {};
+    if (typeof req.body?.text === 'string' && req.body.text.trim()) {
+      updates.text = req.body.text.trim();
+    }
+    if (typeof req.body?.pinned === 'boolean') {
+      updates.pinned = req.body.pinned;
+    }
+
+    const chip = await prisma.memoryChip.update({
+      where: { id: chipId, threadId },
+      data: updates,
+    });
+
+    res.json(chipToDto(chip));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/threads/:id/memories/:chipId', async (req, res, next) => {
+  try {
+    const { id: threadId, chipId } = req.params;
+    await prisma.memoryChip.delete({ where: { id: chipId, threadId } });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ─── Error handler ───────────────────────────────────────────────────────────
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -266,6 +436,13 @@ async function handleIncomingMessage(ws: WebSocket, threadId: string, content: s
     payload: { message },
   } as unknown as WsServerEvent);
 
+  // Handle /remember command
+  if (/^\/remember\s+/i.test(content)) {
+    handleRememberCommand(threadId, message.id, content).catch((err) => {
+      console.error('[remember] failed:', err);
+    });
+  }
+
   // Retrieve relevant memories and emit chips
   const chips = await memory.getRelevant(threadId, content);
   for (const chip of chips) {
@@ -281,7 +458,7 @@ async function handleIncomingMessage(ws: WebSocket, threadId: string, content: s
     });
   }
 
-  // Store message in mem0 for future retrieval (fire-and-forget)
+  // Store message in mem0 (fire-and-forget)
   memory.store(content, 'default', { threadId, role: 'USER', messageId: message.id }).catch((err) => {
     console.error('[memory] store failed:', err);
   });
@@ -304,7 +481,6 @@ wss.on('connection', (ws) => {
         subscriptions.set(ws, event.threadId);
         subscribed = true;
         ws.send(JSON.stringify({ type: 'subscribed', threadId: event.threadId } satisfies WsServerEvent));
-        // Ghost message: agent connected
         emitGhostMessage(event.threadId, 'agent_connected').catch((err) =>
           console.error('[ghost] connect failed:', err),
         );
@@ -317,7 +493,6 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'error', error: 'content is required' } satisfies WsServerEvent));
           return;
         }
-
         await handleIncomingMessage(ws, event.threadId, content);
         return;
       }
