@@ -96,7 +96,8 @@ let threadId: string | null = null;
 let wsConnected = false;
 
 function connectWebSocket(): void {
-  const url = `${CLAWCHAT_WS_URL}?threadId=${encodeURIComponent(threadId!)}`;
+  if (!threadId || !ws) return;
+  const url = `${CLAWCHAT_WS_URL}?threadId=${encodeURIComponent(threadId)}`;
   ws = new WebSocket(url, {
     headers: CLAWCHAT_API_KEY
       ? { Authorization: `Bearer ${CLAWCHAT_API_KEY}` }
@@ -106,14 +107,12 @@ function connectWebSocket(): void {
   ws.on("open", () => {
     console.log("[telegram-bridge] WebSocket connected");
     wsConnected = true;
-    if (threadId) {
-      ws!.send(
-        JSON.stringify({
-          type: "subscribe",
-          threadId: threadId,
-        }),
-      );
-    }
+    ws!.send(
+      JSON.stringify({
+        type: "subscribe",
+        threadId: threadId!,
+      }),
+    );
   });
 
   ws.on("message", (raw) => {
@@ -204,7 +203,6 @@ function handleWsEvent(event: unknown): void {
   if (evt.type === "message.new" && evt.payload?.message) {
     const msg = evt.payload.message;
 
-    // Don't forward HIDDEN messages to Telegram
     if (msg.displayType === "HIDDEN") return;
 
     let metadata: Record<string, unknown> | undefined;
@@ -219,7 +217,6 @@ function handleWsEvent(event: unknown): void {
       }
     }
 
-    // Don't echo messages that originated from Telegram back to Telegram
     if (metadata?.source === "telegram") return;
 
     const telegramContent = translateToTelegram(
