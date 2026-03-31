@@ -17,6 +17,15 @@ const subscriptions = new Map<WebSocket, string>();
 
 app.use(express.json());
 
+// ─── CORS ────────────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
+  next();
+});
+
 // ─── Auth middleware ──────────────────────────────────────────────────────────
 const REQUIRED_API_KEY = process.env.CLAWCHAT_API_KEY ?? '';
 
