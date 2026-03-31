@@ -258,7 +258,24 @@ class OpenClawRpcClient {
 
   private async sendConnect(): Promise<void> {
     try {
-      const result = await this.request('connect', { token: this.token });
+      const result = await this.request('connect', {
+        minProtocol: 3,
+        maxProtocol: 3,
+        client: {
+          id: 'cli',
+          version: '1.0.0',
+          platform: 'node',
+          mode: 'cli',
+        },
+        role: 'operator',
+        scopes: ['operator.read', 'operator.write'],
+        caps: [],
+        commands: [],
+        permissions: {},
+        auth: { token: this.token },
+        locale: 'en-US',
+        userAgent: 'clawchat-bridge/1.0.0',
+      });
       console.log('[bridge] Authenticated with OpenClaw gateway');
       this.onConnected();
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
