@@ -47,16 +47,33 @@ type ThreadDetailNav = NativeStackNavigationProp<
   "ThreadDetail"
 >;
 
+type WebSocketStatus = "connected" | "reconnecting" | "disconnected";
+
 // Exponential backoff reconnect
 function useReconnectingWebSocket(
   url: string,
-  onMessage: (event: WsServerEvent) => void,
+  onMessage: (WsServerEvent) => void,
   threadId: string,
 ) {
   const socketRef = useRef<WebSocket | null>(null);
   const retryCount = useRef(0);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mounted = useRef(true);
+  const [wsStatus, setWsStatus] = useState<WebSocketStatus>("disconnected");
+
+  const updateStatus = useCallback(() => {
+    if (!socketRef.current) {
+      setWsStatus("disconnected");
+      return;
+    }
+    if (socketRef.current.readyState === WebSocket.OPEN) {
+      setWsStatus("connected");
+    } else if (retryTimer.current !== null) {
+      setWsStatus("reconnecting");
+    } else {
+      setWsStatus("disconnected");
+    }
+  }, []);
 
   const connect = useCallback(() => {
     if (!mounted.current) return;
@@ -67,6 +84,7 @@ function useReconnectingWebSocket(
       ws.onopen = () => {
         retryCount.current = 0;
         ws.send(JSON.stringify({ type: "subscribe", threadId }));
+        updateStatus();
       };
 
       ws.onmessage = (event) => {
@@ -90,11 +108,12 @@ function useReconnectingWebSocket(
           `[WS] reconnecting in ${delay}ms (attempt ${retryCount.current})`,
         );
         retryTimer.current = setTimeout(connect, delay);
+        updateStatus();
       };
     } catch (e) {
       console.error("[WS] connect error", e);
     }
-  }, [url, threadId, onMessage]);
+  }, [url, threadId, onMessage, updateStatus]);
 
   useEffect(() => {
     mounted.current = true;
@@ -107,7 +126,27 @@ function useReconnectingWebSocket(
     };
   }, [connect]);
 
-  return socketRef;
+  return { socketRef, retryTimer, wsStatus };
+}
+
+function ConnectionStatusDot({ status }: { status: WebSocketStatus }) {
+  const color =
+    status === "connected"
+      ? "#22c55e"
+      : status === "reconnecting"
+        ? "#eab308"
+        : "#ef4444";
+  return (
+    <View
+      style={{
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: color,
+        marginLeft: 6,
+      }}
+    />
+  );
 }
 
 // Typing indicator dots
@@ -369,10 +408,39 @@ function ThreadDetailContent() {
           >
             ${totalCost.toFixed(3)}
           </Text>
+          <ConnectionStatusDot status={wsStatus} />
         </View>
       ),
     });
   }, [navigation, title, totalCost, parentThreadId, theme]);
+
+  // Update header when wsStatus changes
+  useEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+          <Pressable onPress={() => setMemoryPanelVisible((v) => !v)}>
+            <Text
+              style={{
+                color: theme.accent,
+                fontSize: 13,
+                fontWeight: "600" as const,
+                marginRight: 4,
+              }}
+            >
+              mem
+            </Text>
+          </Pressable>
+          <Text
+            style={{ fontSize: 13, color: theme.textMuted, marginRight: 4 }}
+          >
+            ${totalCost.toFixed(3)}
+          </Text>
+          <ConnectionStatusDot status={wsStatus} />
+        </View>
+      ),
+    });
+  }, [wsStatus, navigation, totalCost, theme]);
 
   const scheduleChipDismiss = useCallback((chipId: string) => {
     const existing = chipDismissTimers.current.get(chipId);
@@ -600,7 +668,11 @@ function ThreadDetailContent() {
     [threadId, navigation, scheduleChipDismiss, scrollToBottom],
   );
 
-  const socketRef = useReconnectingWebSocket(WS_URL, handleWsMessage, threadId);
+  const { socketRef, retryTimer, wsStatus } = useReconnectingWebSocket(
+    WS_URL,
+    handleWsMessage,
+    threadId,
+  );
 
   const handleLoadMore = useCallback(async () => {
     if (!hasMore || loadingMore || !cursor) return;
