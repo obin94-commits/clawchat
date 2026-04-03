@@ -773,27 +773,6 @@ function ThreadDetailContent() {
         };
         setMessages((current) => [...current, userMessage, agentMessage]);
       }
->>>>>>> REPPLACCE
-```
-
-Wait, I noticed a typo in my `REPPLACCE` block name. Let me correct that.
-
-packages/client/src/screens/ThreadDetailScreen.tsx
-```python
-<<<<<<< SEARCH
-      } else {
-        const response = await fetchWithAuth(
-          `${SERVER_URL}/threads/${threadId}/messages`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ content }),
-          },
-          settings.apiKey,
-        );
-        const message = (await response.json()) as Message;
-        setMessages((current) => [...current, message]);
-      }
       setInput("");
       scrollToBottom();
     } catch (error) {
