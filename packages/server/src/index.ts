@@ -737,6 +737,14 @@ app.post("/threads/:id/relay", async (req, res, next) => {
       payload: { message: userMessage },
     } as unknown as WsServerEvent);
 
+    // Broadcast agent_started
+    broadcastToThread(threadId, {
+      type: "agent_started",
+      threadId,
+      agentName: "OpenClaw",
+      runId: userMessage.id,
+    } as unknown as WsServerEvent);
+
     // Forward to OpenClaw agent via HTTP
     const openClawUrl =
       process.env.OPENCLAW_API_URL ??
@@ -783,6 +791,30 @@ app.post("/threads/:id/relay", async (req, res, next) => {
       type: "message.new",
       threadId,
       payload: { message: agentMessage },
+    } as unknown as WsServerEvent);
+
+    // Extract usage and save cost
+    const usage = (agentData as any).usage;
+    if (usage) {
+      const tokens = (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
+      const costUsd = (usage.prompt_tokens ?? 0) * 0.000003 + (usage.completion_tokens ?? 0) * 0.000015;
+      await prisma.costEntry.create({
+        data: { threadId, agentId: "openclaw", tokens, costUsd },
+      });
+      broadcastToThread(threadId, {
+        type: "cost_incurred",
+        threadId,
+        tokens,
+        costUsd,
+      } as unknown as WsServerEvent);
+    }
+
+    // Broadcast agent_completed
+    broadcastToThread(threadId, {
+      type: "agent_completed",
+      threadId,
+      agentName: "OpenClaw",
+      runId: userMessage.id,
     } as unknown as WsServerEvent);
 
     // Return both messages
