@@ -31,13 +31,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
 
   useEffect(() => {
-    AsyncStorage.multiGet(["clawchat_server_url", "clawchat_api_key"])
-      .then((pairs) => {
-        const map = new Map(pairs);
+    Promise.all([
+      AsyncStorage.getItem("clawchat_server_url"),
+      AsyncStorage.getItem("clawchat_api_key"),
+    ])
+      .then(([serverUrl, apiKey]) => {
         setSettings({
-          serverUrl:
-            map.get("clawchat_server_url") ?? DEFAULT_SETTINGS.serverUrl,
-          apiKey: map.get("clawchat_api_key") ?? DEFAULT_SETTINGS.apiKey,
+          serverUrl: serverUrl ?? DEFAULT_SETTINGS.serverUrl,
+          apiKey: apiKey ?? DEFAULT_SETTINGS.apiKey,
         });
       })
       .catch(() => {});
@@ -47,10 +48,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     async (updates: Partial<Settings>) => {
       const next = { ...settings, ...updates };
       setSettings(next);
-      await AsyncStorage.multiSet([
-        ["clawchat_server_url", next.serverUrl],
-        ["clawchat_api_key", next.apiKey],
-      ]);
+      await AsyncStorage.setItem("clawchat_server_url", next.serverUrl);
+      await AsyncStorage.setItem("clawchat_api_key", next.apiKey);
     },
     [settings],
   );
