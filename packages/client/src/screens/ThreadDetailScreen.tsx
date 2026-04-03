@@ -529,7 +529,7 @@ function ThreadDetailContent() {
   }, [threadId, SERVER_URL, settings.apiKey]);
 
   useEffect(() => {
-    fetchWithAuth(`${SERVER_URL}/threads/${threadId}/cost`, {}, settings.apiKey)
+    fetchWithAuth(`${SERVER_URL}/threads/${threadId}/cost/summary`, {}, settings.apiKey)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data) {
@@ -1246,6 +1246,10 @@ function ThreadDetailContent() {
           ) : null
         }
         renderItem={({ item }) => {
+          // Hide noisy system messages (bridge connect/disconnect)
+          if (item.role === "SYSTEM" && /agent_(connected|disconnected)/.test(item.content)) {
+            return null;
+          }
           const isGhost =
             item.displayType !== "VISIBLE" ||
             item.role === "SYSTEM" ||
