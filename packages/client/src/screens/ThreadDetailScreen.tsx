@@ -759,6 +759,30 @@ function ThreadDetailContent() {
         );
       } else {
         const response = await fetchWithAuth(
+          `${SERVER_URL}/threads/${threadId}/relay`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content }),
+          },
+          settings.apiKey,
+        );
+        const { userMessage, agentMessage } = (await response.json()) as {
+          userMessage: Message;
+          agentMessage: Message;
+        };
+        setMessages((current) => [...current, userMessage, agentMessage]);
+      }
+>>>>>>> REPPLACCE
+```
+
+Wait, I noticed a typo in my `REPPLACCE` block name. Let me correct that.
+
+packages/client/src/screens/ThreadDetailScreen.tsx
+```python
+<<<<<<< SEARCH
+      } else {
+        const response = await fetchWithAuth(
           `${SERVER_URL}/threads/${threadId}/messages`,
           {
             method: "POST",
