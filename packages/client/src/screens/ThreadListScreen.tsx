@@ -236,6 +236,7 @@ function ThreadListContent() {
         const thread = (await res.json()) as ThreadWithPreview;
         setThreads((prev) => [thread, ...prev]);
         await saveLastReadTimestamp(thread.id);
+        await loadThreads();
         navigation.navigate("ThreadDetail", {
           threadId: thread.id,
           title: thread.title,

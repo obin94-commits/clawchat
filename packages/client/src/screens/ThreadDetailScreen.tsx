@@ -11,6 +11,7 @@ import * as ImagePicker from "expo-image-picker";
 import {
   Alert,
   Animated,
+  ActivityIndicator,
   Clipboard,
   FlatList,
   Image,
@@ -333,6 +334,7 @@ function ThreadDetailContent() {
   const { threadId, title, parentThreadId } = route.params;
 
   const [messages, setMessages] = useState<Message[]>([]);
+  const [loading, setLoading] = useState(false);
   const [input, setInput] = useState("");
   const [activeChips, setActiveChips] = useState<MemoryChip[]>([]);
   const [suggestedChips, setSuggestedChips] = useState<MemoryChip[]>([]);
@@ -482,6 +484,7 @@ function ThreadDetailContent() {
   const loadMessages = useCallback(
     async (cursor?: string) => {
       try {
+        if (!cursor) setLoading(true);
         const url = cursor
           ? `${SERVER_URL}/threads/${threadId}/messages?cursor=${cursor}&limit=30`
           : `${SERVER_URL}/threads/${threadId}/messages?limit=30`;
@@ -502,6 +505,8 @@ function ThreadDetailContent() {
         }
       } catch (error) {
         console.error("Failed to load messages", error);
+      } finally {
+        if (!cursor) setLoading(false);
       }
     },
     [threadId, SERVER_URL, settings.apiKey],
@@ -1222,6 +1227,13 @@ function ThreadDetailContent() {
               <Text style={{ color: theme.textFaint, fontSize: 12 }}>
                 Loading older messages…
               </Text>
+            </View>
+          ) : null
+        }
+        ListEmptyComponent={
+          loading ? (
+            <View style={{ flex: 1, justifyContent: "center", alignItems: "center", marginTop: 40 }}>
+              <ActivityIndicator size="large" color={theme.accent} />
             </View>
           ) : null
         }
