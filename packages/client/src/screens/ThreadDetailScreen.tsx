@@ -752,12 +752,8 @@ function ThreadDetailContent() {
     setReplyTo(null);
 
     try {
-      const socket = socketRef.current;
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(
-          JSON.stringify({ type: "send_message", threadId, content }),
-        );
-      } else {
+      // Always use HTTP relay to get agent responses
+      {
         const response = await fetchWithAuth(
           `${SERVER_URL}/threads/${threadId}/relay`,
           {
