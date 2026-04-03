@@ -8,9 +8,13 @@
     "build": "tsc",
     "prepublishOnly": "npx tsc"
   },
-  "devDependencies": { 
+  "dependencies": {
+    "ws": "^8.14.0"
+  },
+  "devDependencies": {
     "tslib": "^2.6.0",
     "@types/node": "^20",
+    "@types/ws": "^8.5.0",
     "undici-types": "8.0.0"
   }
 }
