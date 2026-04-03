@@ -80,6 +80,15 @@ importers:
         specifier: ^5.0.0
         version: 5.9.3
 
+  packages/channel-openclaw:
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.37
+      tslib:
+        specifier: ^2.6.0
+        version: 2.8.1
+
   packages/client:
     dependencies:
       '@babel/runtime':

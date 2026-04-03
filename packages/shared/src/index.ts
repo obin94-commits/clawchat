@@ -11,18 +11,18 @@ export interface Thread {
   updatedAt: Date;
 }
 
-export type MessageRole = 'USER' | 'AGENT' | 'SYSTEM' | 'TOOL';
-export type DisplayType = 'VISIBLE' | 'COLLAPSED' | 'HIDDEN' | 'GHOST';
+export type MessageRole = "USER" | "AGENT" | "SYSTEM" | "TOOL";
+export type DisplayType = "VISIBLE" | "COLLAPSED" | "HIDDEN" | "GHOST";
 
 export type MessageType =
-  | 'regular'
-  | 'agent_started'
-  | 'agent_completed'
-  | 'agent_failed'
-  | 'agent_progress'
-  | 'memory_updated'
-  | 'memory_searched'
-  | 'cost_incurred';
+  | "regular"
+  | "agent_started"
+  | "agent_completed"
+  | "agent_failed"
+  | "agent_progress"
+  | "memory_updated"
+  | "memory_searched"
+  | "cost_incurred";
 
 export interface Message {
   id: MessageId;
@@ -44,7 +44,7 @@ export interface GhostMessage {
   threadId: ThreadId;
   role: MessageRole;
   content: string;
-  displayType: 'VISIBLE';
+  displayType: "GHOST";
   createdAt: string;
 }
 
@@ -57,7 +57,7 @@ export interface Agent {
 export interface AgentRunInfo {
   runId: string;
   agentName: string;
-  status: 'running' | 'completed' | 'failed';
+  status: "running" | "completed" | "failed";
   startedAt: number;
   completedAt?: number;
   lastAction?: string;
@@ -87,28 +87,68 @@ export interface PersistedMemoryChip {
 
 export interface CostEntry {
   id: string;
-  amount: number;
-  currency: string;
-  timestamp: Date;
-  description?: string;
+  threadId: string;
+  agentId?: string | null;
+  tokens: number;
+  costUsd: number;
+  createdAt: string;
 }
 
 export type WsClientEvent =
-  | { type: 'subscribe'; threadId: string }
-  | { type: 'send_message'; threadId: string; content: string; messageType?: MessageType }
-  | { type: 'thread.navigate'; threadId: string };
+  | { type: "subscribe"; threadId: string }
+  | {
+      type: "send_message";
+      threadId: string;
+      content: string;
+      messageType?: MessageType;
+    }
+  | { type: "thread.navigate"; threadId: string };
 
 export type WsServerEvent =
-  | { type: 'message'; message: Message }
-  | { type: 'message.new'; threadId: string; payload: { message: Message } }
-  | { type: 'subscribed'; threadId: string }
-  | { type: 'error'; error: string }
-  | { type: 'agent_activity'; ghostMessage: GhostMessage }
-  | { type: 'memory_chip'; threadId: string; chip: MemoryChip }
-  | { type: 'memory_chip.saved'; threadId: string; chip: PersistedMemoryChip }
-  | { type: 'agent_started'; threadId: string; agentName: string; runId: string }
-  | { type: 'agent_progress'; threadId: string; agentName: string; runId: string; action: string }
-  | { type: 'agent_completed'; threadId: string; agentName: string; runId: string }
-  | { type: 'agent_failed'; threadId: string; agentName: string; runId: string; error: string }
-  | { type: 'cost_incurred'; threadId: string; cost: number; tokens?: number; agentName?: string; runId?: string }
-  | { type: 'thread.branch'; parentThreadId: string; childThread: Thread; branchedFromMessageId: string };
+  | { type: "message"; message: Message }
+  | { type: "message.new"; threadId: string; payload: { message: Message } }
+  | { type: "subscribed"; threadId: string }
+  | { type: "error"; error: string }
+  | { type: "agent_activity"; ghostMessage: GhostMessage }
+  | { type: "memory_chip"; threadId: string; chip: MemoryChip }
+  | { type: "memory_chip.saved"; threadId: string; chip: PersistedMemoryChip }
+  | {
+      type: "agent_started";
+      threadId: string;
+      agentName: string;
+      runId: string;
+    }
+  | {
+      type: "agent_progress";
+      threadId: string;
+      agentName: string;
+      runId: string;
+      action: string;
+    }
+  | {
+      type: "agent_completed";
+      threadId: string;
+      agentName: string;
+      runId: string;
+    }
+  | {
+      type: "agent_failed";
+      threadId: string;
+      agentName: string;
+      runId: string;
+      error: string;
+    }
+  | {
+      type: "cost_incurred";
+      threadId: string;
+      cost: number;
+      tokens?: number;
+      agentName?: string;
+      runId?: string;
+    }
+  | {
+      type: "thread.branch";
+      parentThreadId: string;
+      childThread: Thread;
+      branchedFromMessageId: string;
+    };

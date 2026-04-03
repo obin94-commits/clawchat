@@ -25,21 +25,21 @@
  *   Unmatched threads route to the first (default) agent.
  */
 
-import dotenv from 'dotenv';
-import WebSocket from 'ws';
-import crypto from 'crypto';
+import dotenv from "dotenv";
+import WebSocket from "ws";
+import crypto from "crypto";
 
 dotenv.config();
 
-const CLAWCHAT_URL = process.env.CLAWCHAT_URL ?? 'http://localhost:3001';
-const ACTIVITY_THREAD_TITLE = 'OpenClaw Activity';
+const CLAWCHAT_URL = process.env.CLAWCHAT_URL ?? "http://localhost:3001";
+const ACTIVITY_THREAD_TITLE = "OpenClaw Activity";
 const POLL_INTERVAL_MS = 3_000;
 
 // ─── Multi-agent config ─────────────────────────────────────────────────────
 
 interface AgentConfig {
   name: string;
-  url: string;       // ws:// or wss:// to OpenClaw gateway
+  url: string; // ws:// or wss:// to OpenClaw gateway
   token: string;
   sessionKey?: string;
 }
@@ -50,20 +50,29 @@ function loadAgentConfigs(): AgentConfig[] {
     try {
       const parsed = JSON.parse(raw) as AgentConfig[];
       if (Array.isArray(parsed) && parsed.length > 0) {
-        console.log(`[bridge] Loaded ${parsed.length} agent config(s) from OPENCLAW_AGENTS`);
+        console.log(
+          `[bridge] Loaded ${parsed.length} agent config(s) from OPENCLAW_AGENTS`,
+        );
         return parsed;
       }
     } catch (err) {
-      console.warn('[bridge] Failed to parse OPENCLAW_AGENTS JSON:', (err as Error).message);
+      console.warn(
+        "[bridge] Failed to parse OPENCLAW_AGENTS JSON:",
+        (err as Error).message,
+      );
     }
   }
   // Single-agent fallback from individual env vars
-  return [{
-    name: process.env.OPENCLAW_NAME ?? 'openclaw',
-    url: process.env.OPENCLAW_WS ?? 'ws://100.102.5.72:18789',
-    token: process.env.OPENCLAW_TOKEN ?? '698900e334ca63800944174b5d1617cd53f7dc0b4a211794',
-    sessionKey: process.env.OPENCLAW_SESSION ?? 'main',
-  }];
+  return [
+    {
+      name: process.env.OPENCLAW_NAME ?? "openclaw",
+      url: process.env.OPENCLAW_WS ?? "ws://100.102.5.72:18789",
+      token:
+        process.env.OPENCLAW_TOKEN ??
+        "698900e334ca63800944174b5d1617cd53f7dc0b4a211794",
+      sessionKey: process.env.OPENCLAW_SESSION ?? "main",
+    },
+  ];
 }
 
 const AGENT_CONFIGS = loadAgentConfigs();
@@ -71,21 +80,21 @@ const AGENT_CONFIGS = loadAgentConfigs();
 // ─── OpenClaw RPC message shapes ────────────────────────────────────────────
 
 interface RpcRequest {
-  type: 'req';
+  type: "req";
   id: string;
   method: string;
   params: Record<string, unknown>;
 }
 
 interface RpcResponse {
-  type: 'res';
+  type: "res";
   id: string;
   result?: unknown;
   error?: { code?: string; message?: string };
 }
 
 interface RpcEvent {
-  type: 'event';
+  type: "event";
   seq?: number;
   stream?: string;
   text?: string;
@@ -108,7 +117,11 @@ interface RpcEvent {
   [key: string]: unknown;
 }
 
-type RpcMessage = RpcRequest | RpcResponse | RpcEvent | { type: string; [key: string]: unknown };
+type RpcMessage =
+  | RpcRequest
+  | RpcResponse
+  | RpcEvent
+  | { type: string; [key: string]: unknown };
 
 interface OpenClawChatMessage {
   id?: string;
@@ -125,33 +138,42 @@ interface OpenClawChatMessage {
 // ─── ClawChat REST helpers ──────────────────────────────────────────────────
 
 async function clawchatGet<T>(path: string): Promise<T> {
-  const headers = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
   if (process.env.CLAWCHAT_API_KEY) {
-    headers['Authorization'] = `Bearer ${process.env.CLAWCHAT_API_KEY}`;
+    headers["Authorization"] = `Bearer ${process.env.CLAWCHAT_API_KEY}`;
   }
-  const res = await fetch(`${CLAWCHAT_URL}${path}`, { method: 'GET', headers });
+  const res = await fetch(`${CLAWCHAT_URL}${path}`, { method: "GET", headers });
   if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
   return res.json() as Promise<T>;
 }
 
 async function clawchatPost<T>(path: string, body: unknown): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (process.env.CLAWCHAT_API_KEY) {
+    headers["Authorization"] = `Bearer ${process.env.CLAWCHAT_API_KEY}`;
+  }
   const res = await fetch(`${CLAWCHAT_URL}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers,
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
+    const text = await res.text().catch(() => "");
     throw new Error(`POST ${path} failed: ${res.status} ${text}`);
   }
   return res.json() as Promise<T>;
 }
 
 async function findOrCreateThread(title: string): Promise<string> {
-  const threads = await clawchatGet<Array<{ id: string; title: string }>>('/threads');
+  const threads =
+    await clawchatGet<Array<{ id: string; title: string }>>("/threads");
   const existing = threads.find((t) => t.title === title);
   if (existing) return existing.id;
-  const created = await clawchatPost<{ id: string }>('/threads', { title });
+  const created = await clawchatPost<{ id: string }>("/threads", { title });
   return created.id;
 }
 
@@ -171,14 +193,23 @@ async function postMessage(
   }
 }
 
-async function createMemoryChip(threadId: string, text: string, metadata?: Record<string, unknown>): Promise<void> {
+async function createMemoryChip(
+  threadId: string,
+  text: string,
+  metadata?: Record<string, unknown>,
+): Promise<void> {
   const body: Record<string, unknown> = { text };
   if (metadata) body.metadata = metadata;
   try {
     await clawchatPost(`/threads/${threadId}/memories`, body);
-    console.log(`[bridge] Memory chip created in thread ${threadId}: ${text.slice(0, 60)}`);
+    console.log(
+      `[bridge] Memory chip created in thread ${threadId}: ${text.slice(0, 60)}`,
+    );
   } catch (err) {
-    console.error('[bridge] Failed to create memory chip:', (err as Error).message);
+    console.error(
+      "[bridge] Failed to create memory chip:",
+      (err as Error).message,
+    );
   }
 }
 
@@ -189,9 +220,16 @@ async function postCostEntry(
   costUsd: number,
 ): Promise<void> {
   try {
-    await clawchatPost(`/threads/${threadId}/cost`, { agentId, tokens, costUsd });
+    await clawchatPost(`/threads/${threadId}/cost`, {
+      agentId,
+      tokens,
+      costUsd,
+    });
   } catch (err) {
-    console.error('[bridge] Failed to post cost entry:', (err as Error).message);
+    console.error(
+      "[bridge] Failed to post cost entry:",
+      (err as Error).message,
+    );
   }
 }
 
@@ -204,34 +242,50 @@ interface Translated {
 }
 
 function translateChatMessage(msg: OpenClawChatMessage): Translated | null {
-  const role = (msg.role ?? '').toLowerCase();
-  const kind = (msg.kind ?? msg.stream ?? '').toLowerCase();
-  const text = (msg.content ?? msg.text ?? '') as string;
+  const role = (msg.role ?? "").toLowerCase();
+  const kind = (msg.kind ?? msg.stream ?? "").toLowerCase();
+  const text = (msg.content ?? msg.text ?? "") as string;
 
-  if (role === 'assistant' || role === 'agent') {
+  if (role === "assistant" || role === "agent") {
     if (!text) return null;
-    return { content: text, role: 'AGENT', displayType: 'VISIBLE' };
+    return { content: text, role: "AGENT", displayType: "VISIBLE" };
   }
-  if (role === 'user') {
+  if (role === "user") {
     if (!text) return null;
-    return { content: text, role: 'USER', displayType: 'VISIBLE' };
+    return { content: text, role: "USER", displayType: "VISIBLE" };
   }
-  if (role === 'system' || kind === 'system') {
+  if (role === "system" || kind === "system") {
     if (!text) return null;
     if (/agent.started|start(ing|ed)/i.test(text))
-      return { content: `agent_started: OpenClaw`, role: 'SYSTEM', displayType: 'GHOST' };
+      return {
+        content: `agent_started: OpenClaw`,
+        role: "SYSTEM",
+        displayType: "GHOST",
+      };
     if (/agent.complet|finish|done/i.test(text))
-      return { content: `agent_completed: OpenClaw`, role: 'SYSTEM', displayType: 'GHOST' };
+      return {
+        content: `agent_completed: OpenClaw`,
+        role: "SYSTEM",
+        displayType: "GHOST",
+      };
     if (/agent.fail|error/i.test(text))
-      return { content: `agent_failed: OpenClaw — ${text}`, role: 'SYSTEM', displayType: 'GHOST' };
-    return { content: text, role: 'SYSTEM', displayType: 'GHOST' };
+      return {
+        content: `agent_failed: OpenClaw — ${text}`,
+        role: "SYSTEM",
+        displayType: "GHOST",
+      };
+    return { content: text, role: "SYSTEM", displayType: "GHOST" };
   }
-  if (kind === 'stream' || kind === 'tool_use' || kind === 'tool_result') {
+  if (kind === "stream" || kind === "tool_use" || kind === "tool_result") {
     if (!text) return null;
-    return { content: `agent_progress: OpenClaw — ${text}`, role: 'SYSTEM', displayType: 'GHOST' };
+    return {
+      content: `agent_progress: OpenClaw — ${text}`,
+      role: "SYSTEM",
+      displayType: "GHOST",
+    };
   }
   if (text) {
-    return { content: text, role: 'AGENT', displayType: 'VISIBLE' };
+    return { content: text, role: "AGENT", displayType: "VISIBLE" };
   }
   return null;
 }
@@ -240,7 +294,10 @@ function translateChatMessage(msg: OpenClawChatMessage): Translated | null {
 
 class OpenClawRpcClient {
   private ws: WebSocket | null = null;
-  private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  private pending = new Map<
+    string,
+    { resolve: (v: unknown) => void; reject: (e: Error) => void }
+  >();
   private closed = false;
   private lastSeq: number | null = null;
   private backoffMs = 800;
@@ -262,17 +319,20 @@ class OpenClawRpcClient {
     this.closed = true;
     this.ws?.close();
     this.ws = null;
-    this.flushPending(new Error('RPC client stopped'));
+    this.flushPending(new Error("RPC client stopped"));
   }
 
   get connected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
-  async request(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-    if (!this.connected) throw new Error('gateway not connected');
+  async request(
+    method: string,
+    params: Record<string, unknown> = {},
+  ): Promise<unknown> {
+    if (!this.connected) throw new Error("gateway not connected");
     const id = crypto.randomUUID();
-    const msg: RpcRequest = { type: 'req', id, method, params };
+    const msg: RpcRequest = { type: "req", id, method, params };
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.ws!.send(JSON.stringify(msg));
@@ -289,67 +349,75 @@ class OpenClawRpcClient {
     if (this.closed) return;
     this.ws = new WebSocket(this.url);
 
-    this.ws.on('open', () => {
+    this.ws.on("open", () => {
       this.wsFailures = 0;
       this.backoffMs = 800;
-      console.log('[rpc] OpenClaw WS connected — authenticating…');
+      console.log("[rpc] OpenClaw WS connected — authenticating…");
       setTimeout(() => this.sendConnect(), 750);
     });
 
-    this.ws.on('message', (raw) => {
+    this.ws.on("message", (raw) => {
       try {
         const msg = JSON.parse(raw.toString()) as RpcMessage;
         this.handleMessage(msg);
       } catch {
-        console.warn('[rpc] Failed to parse WS message:', raw.toString().slice(0, 80));
+        console.warn(
+          "[rpc] Failed to parse WS message:",
+          raw.toString().slice(0, 80),
+        );
       }
     });
 
-    this.ws.on('error', (err) => {
-      console.error('[rpc] OpenClaw WS error:', err.message);
+    this.ws.on("error", (err) => {
+      console.error("[rpc] OpenClaw WS error:", err.message);
     });
 
-    this.ws.on('close', () => {
-      this.flushPending(new Error('WebSocket closed'));
+    this.ws.on("close", () => {
+      this.flushPending(new Error("WebSocket closed"));
       if (this.closed) return;
       this.wsFailures++;
-      const delay = Math.min(this.backoffMs * Math.pow(1.5, Math.min(this.wsFailures, 8)), 60_000);
-      console.log(`[rpc] WS closed — reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${this.wsFailures})`);
+      const delay = Math.min(
+        this.backoffMs * Math.pow(1.5, Math.min(this.wsFailures, 8)),
+        60_000,
+      );
+      console.log(
+        `[rpc] WS closed — reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${this.wsFailures})`,
+      );
       setTimeout(() => this.connect(), delay);
     });
   }
 
   private async sendConnect(): Promise<void> {
     try {
-      await this.request('connect', {
+      await this.request("connect", {
         minProtocol: 3,
         maxProtocol: 3,
-        client: { id: 'cli', version: '1.0.0', platform: 'node', mode: 'cli' },
-        role: 'operator',
-        scopes: ['operator.read', 'operator.write'],
+        client: { id: "cli", version: "1.0.0", platform: "node", mode: "cli" },
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
         caps: [],
         commands: [],
         permissions: {},
         auth: { token: this.token },
-        locale: 'en-US',
-        userAgent: 'clawchat-bridge/1.0.0',
+        locale: "en-US",
+        userAgent: "clawchat-bridge/1.0.0",
       });
-      console.log('[rpc] Authenticated with OpenClaw gateway');
+      console.log("[rpc] Authenticated with OpenClaw gateway");
       this.onConnected();
     } catch (err) {
-      console.error('[rpc] OpenClaw auth failed:', (err as Error).message);
+      console.error("[rpc] OpenClaw auth failed:", (err as Error).message);
     }
   }
 
   private handleMessage(msg: RpcMessage): void {
     try {
-      if (msg.type === 'res') {
+      if (msg.type === "res") {
         const res = msg as RpcResponse;
         const pending = this.pending.get(res.id);
         if (pending) {
           this.pending.delete(res.id);
           if (res.error) {
-            pending.reject(new Error(res.error.message ?? 'RPC error'));
+            pending.reject(new Error(res.error.message ?? "RPC error"));
           } else {
             pending.resolve(res.result);
           }
@@ -357,19 +425,21 @@ class OpenClawRpcClient {
         return;
       }
 
-      if (msg.type === 'event') {
+      if (msg.type === "event") {
         const event = msg as RpcEvent;
-        const seq = typeof event.seq === 'number' ? event.seq : null;
+        const seq = typeof event.seq === "number" ? event.seq : null;
         if (seq !== null) {
           if (this.lastSeq !== null && seq > this.lastSeq + 1) {
-            console.warn(`[rpc] Event gap: expected seq ${this.lastSeq + 1}, got ${seq}`);
+            console.warn(
+              `[rpc] Event gap: expected seq ${this.lastSeq + 1}, got ${seq}`,
+            );
           }
           this.lastSeq = seq;
         }
         this.onEvent(event);
       }
     } catch (err) {
-      console.error('[rpc] handleMessage error:', (err as Error).message);
+      console.error("[rpc] handleMessage error:", (err as Error).message);
     }
   }
 
@@ -394,6 +464,9 @@ class OpenClawBridgeAgent {
   /** most-recently-seen message timestamp per thread, for polling user input */
   private lastUserMsgTime = new Map<string, number>();
 
+  /** polling intervals for cleanup on reconnect */
+  private pollingIntervals: ReturnType<typeof setTimeout>[] = [];
+
   private rpcClient: OpenClawRpcClient;
   private defaultThreadId: string | null = null;
 
@@ -413,12 +486,14 @@ class OpenClawBridgeAgent {
   registerThread(threadId: string, sessionKey: string): void {
     this.threadToSession.set(threadId, sessionKey);
     this.sessionToThread.set(sessionKey, threadId);
-    console.log(`[${this.agentName}] Thread ${threadId} → session '${sessionKey}'`);
+    console.log(
+      `[${this.agentName}] Thread ${threadId} → session '${sessionKey}'`,
+    );
   }
 
   setDefaultThread(threadId: string): void {
     this.defaultThreadId = threadId;
-    const sessionKey = this.config.sessionKey ?? 'main';
+    const sessionKey = this.config.sessionKey ?? "main";
     this.registerThread(threadId, sessionKey);
   }
 
@@ -433,15 +508,20 @@ class OpenClawBridgeAgent {
       return;
     }
     try {
-      await this.rpcClient.request('session.input', {
+      await this.rpcClient.request("session.input", {
         sessionKey,
         content,
-        role: 'user',
+        role: "user",
       });
-      console.log(`[${this.agentName}] Relayed user message to session '${sessionKey}': ${content.slice(0, 60)}`);
+      console.log(
+        `[${this.agentName}] Relayed user message to session '${sessionKey}': ${content.slice(0, 60)}`,
+      );
     } catch (err) {
       // session.input may not exist in all gateway versions; log and move on
-      console.warn(`[${this.agentName}] session.input failed (method may differ):`, (err as Error).message);
+      console.warn(
+        `[${this.agentName}] session.input failed (method may differ):`,
+        (err as Error).message,
+      );
     }
   }
 
@@ -449,7 +529,10 @@ class OpenClawBridgeAgent {
 
   private getSeenSet(threadId: string): Set<string> {
     let s = this.seenIds.get(threadId);
-    if (!s) { s = new Set(); this.seenIds.set(threadId, s); }
+    if (!s) {
+      s = new Set();
+      this.seenIds.set(threadId, s);
+    }
     return s;
   }
 
@@ -468,18 +551,29 @@ class OpenClawBridgeAgent {
   // ── Connected callback ──────────────────────────────────────────────────────
 
   private onConnected(): void {
+    // Clear any existing polling intervals to prevent duplicates
+    for (const interval of this.pollingIntervals) {
+      clearTimeout(interval);
+    }
+    this.pollingIntervals = [];
+
     const tick = async () => {
       if (!this.rpcClient.connected) return;
       for (const [threadId, sessionKey] of this.threadToSession) {
         try {
           await this.pollChatHistory(threadId, sessionKey);
         } catch (err) {
-          console.error(`[${this.agentName}] pollChatHistory error:`, (err as Error).message);
+          console.error(
+            `[${this.agentName}] pollChatHistory error:`,
+            (err as Error).message,
+          );
         }
       }
-      setTimeout(tick, POLL_INTERVAL_MS);
+      const interval = setTimeout(tick, POLL_INTERVAL_MS);
+      this.pollingIntervals.push(interval);
     };
-    setTimeout(tick, 0);
+    const initialTick = setTimeout(tick, 0);
+    this.pollingIntervals.push(initialTick);
 
     // Also poll ClawChat for new user messages to relay to OpenClaw
     const inputTick = async () => {
@@ -487,44 +581,64 @@ class OpenClawBridgeAgent {
         try {
           await this.pollClawChatForUserInput(threadId, sessionKey);
         } catch (err) {
-          console.error(`[${this.agentName}] pollClawChatForUserInput error:`, (err as Error).message);
+          console.error(
+            `[${this.agentName}] pollClawChatForUserInput error:`,
+            (err as Error).message,
+          );
         }
       }
-      setTimeout(inputTick, POLL_INTERVAL_MS);
+      const interval = setTimeout(inputTick, POLL_INTERVAL_MS);
+      this.pollingIntervals.push(interval);
     };
-    setTimeout(inputTick, 1_500); // offset from history poll
+    const initialInputTick = setTimeout(inputTick, 1_500); // offset from history poll
+    this.pollingIntervals.push(initialInputTick);
   }
 
   // ── Poll OpenClaw chat history → ClawChat ──────────────────────────────────
 
-  private async pollChatHistory(threadId: string, sessionKey: string): Promise<void> {
+  private async pollChatHistory(
+    threadId: string,
+    sessionKey: string,
+  ): Promise<void> {
     let result: unknown;
     try {
-      result = await this.rpcClient.request('chat.history', { sessionKey, limit: 200 });
+      result = await this.rpcClient.request("chat.history", {
+        sessionKey,
+        limit: 200,
+      });
     } catch (err) {
-      console.warn(`[${this.agentName}] chat.history failed:`, (err as Error).message);
+      console.warn(
+        `[${this.agentName}] chat.history failed:`,
+        (err as Error).message,
+      );
       return;
     }
 
-    const messages: OpenClawChatMessage[] = Array.isArray((result as Record<string, unknown>)?.messages)
+    const messages: OpenClawChatMessage[] = Array.isArray(
+      (result as Record<string, unknown>)?.messages,
+    )
       ? ((result as Record<string, unknown>).messages as OpenClawChatMessage[])
-      : Array.isArray(result) ? (result as OpenClawChatMessage[]) : [];
+      : Array.isArray(result)
+        ? (result as OpenClawChatMessage[])
+        : [];
 
     for (const msg of messages) {
-      const id = String(msg.id ?? '');
+      const id = String(msg.id ?? "");
       if (!id) continue;
       if (this.hasSeen(threadId, id)) continue;
       this.markSeen(threadId, id);
 
       const translated = translateChatMessage(msg);
       if (translated) {
-        console.log(`[${this.agentName}] → ClawChat [${translated.displayType}] ${translated.content.slice(0, 80)}`);
+        console.log(
+          `[${this.agentName}] → ClawChat [${translated.displayType}] ${translated.content.slice(0, 80)}`,
+        );
         await postMessage(
           threadId,
           translated.content,
           translated.role,
           translated.displayType,
-          { source: 'openclaw', agent: this.agentName, originalId: id },
+          { source: "openclaw", agent: this.agentName, originalId: id },
         );
       }
     }
@@ -532,23 +646,39 @@ class OpenClawBridgeAgent {
 
   // ── Poll ClawChat for user messages → OpenClaw ─────────────────────────────
 
-  private async pollClawChatForUserInput(threadId: string, sessionKey: string): Promise<void> {
-    type ClawMsg = { id: string; role: string; content: string; metadata?: string | null; createdAt: string };
-    const messages = await clawchatGet<ClawMsg[]>(`/threads/${threadId}/messages`);
+  private async pollClawChatForUserInput(
+    threadId: string,
+    sessionKey: string,
+  ): Promise<void> {
+    type ClawMsg = {
+      id: string;
+      role: string;
+      content: string;
+      metadata?: string | null;
+      createdAt: string;
+    };
+    const data = await clawchatGet<{ messages: ClawMsg[] }>(
+      `/threads/${threadId}/messages`,
+    );
+    const messages = data.messages;
 
     const lastTime = this.lastUserMsgTime.get(threadId) ?? 0;
     let newLastTime = lastTime;
 
     for (const msg of messages) {
-      if (msg.role !== 'USER') continue;
+      if (msg.role !== "USER") continue;
 
       const msgTime = new Date(msg.createdAt).getTime();
       if (msgTime <= lastTime) continue;
 
       // Skip messages that originated from OpenClaw (avoid echo)
       let meta: Record<string, unknown> = {};
-      try { meta = msg.metadata ? JSON.parse(msg.metadata) as Record<string, unknown> : {}; } catch {}
-      if (meta.source === 'openclaw') continue;
+      try {
+        meta = msg.metadata
+          ? (JSON.parse(msg.metadata) as Record<string, unknown>)
+          : {};
+      } catch {}
+      if (meta.source === "openclaw") continue;
 
       // Relay to OpenClaw session
       await this.sendToSession(sessionKey, msg.content);
@@ -564,132 +694,182 @@ class OpenClawBridgeAgent {
 
   private handleRpcEvent(event: RpcEvent): void {
     try {
-      const threadId = this.defaultThreadId;
+      const sessionKey = String(
+        event.parentSessionKey ??
+          event.sessionKey ??
+          this.config.sessionKey ??
+          "main",
+      );
+      let threadId = this.sessionToThread.get(sessionKey);
+      if (!threadId) {
+        threadId = this.defaultThreadId ?? undefined;
+      }
       if (!threadId) return;
 
-      const id = String(event.id ?? '');
+      const id = String(event.id ?? "");
       if (id && this.hasSeen(threadId, id)) return;
       if (id) this.markSeen(threadId, id);
 
-      const kind = String(event.kind ?? '').toLowerCase();
-      const stream = String(event.stream ?? '').toLowerCase();
-      const text = String(event.text ?? '');
+      const kind = String(event.kind ?? "").toLowerCase();
+      const stream = String(event.stream ?? "").toLowerCase();
+      const text = String(event.text ?? "");
 
       // ── Sub-agent: started ───────────────────────────────────────────────
       if (
-        kind === 'subagent_started' ||
-        kind === 'subagent.started' ||
-        kind === 'agent_spawn' ||
-        kind === 'agent.spawn' ||
-        (kind === 'subagent' && event.status === 'started')
+        kind === "subagent_started" ||
+        kind === "subagent.started" ||
+        kind === "agent_spawn" ||
+        kind === "agent.spawn" ||
+        (kind === "subagent" && event.status === "started")
       ) {
-        const label = String(event.label ?? event.subAgentId ?? 'sub-agent');
-        const model = String(event.model ?? '');
-        const runId = String(event.subAgentId ?? crypto.randomUUID());
+        const label = String(event.label ?? event.subAgentId ?? "sub-agent");
+        const model = String(event.model ?? "");
+        const runId = event.subAgentId ?? crypto.randomUUID();
 
         console.log(`[${this.agentName}] Sub-agent started: ${label}`);
         postMessage(
           threadId,
-          `agent_started: ${label}${model ? ` (${model})` : ''}`,
-          'SYSTEM',
-          'GHOST',
-          { source: 'openclaw', agent: this.agentName, subAgentLabel: label, model, runId, event: 'subagent_started' },
+          `agent_started: ${label}${model ? ` (${model})` : ""}`,
+          "SYSTEM",
+          "GHOST",
+          {
+            source: "openclaw",
+            agent: this.agentName,
+            subAgentLabel: label,
+            model,
+            runId,
+            event: "subagent_started",
+          },
         ).catch(console.error);
         return;
       }
 
       // ── Sub-agent: completed ─────────────────────────────────────────────
       if (
-        kind === 'subagent_completed' ||
-        kind === 'subagent.completed' ||
-        kind === 'agent_complete' ||
-        kind === 'agent.complete' ||
-        (kind === 'subagent' && event.status === 'completed')
+        kind === "subagent_completed" ||
+        kind === "subagent.completed" ||
+        kind === "agent_complete" ||
+        kind === "agent.complete" ||
+        (kind === "subagent" && event.status === "completed")
       ) {
-        const label = String(event.label ?? event.subAgentId ?? 'sub-agent');
-        const model = String(event.model ?? '');
+        const label = String(event.label ?? event.subAgentId ?? "sub-agent");
+        const model = String(event.model ?? "");
         const runId = String(event.subAgentId ?? crypto.randomUUID());
-        const result = event.result ? String(event.result).slice(0, 200) : '';
+        const result = event.result ? String(event.result).slice(0, 200) : "";
 
         console.log(`[${this.agentName}] Sub-agent completed: ${label}`);
         postMessage(
           threadId,
-          `agent_completed: ${label}${result ? ` — ${result}` : ''}`,
-          'SYSTEM',
-          'GHOST',
-          { source: 'openclaw', agent: this.agentName, subAgentLabel: label, model, runId, event: 'subagent_completed' },
+          `agent_completed: ${label}${result ? ` — ${result}` : ""}`,
+          "SYSTEM",
+          "GHOST",
+          {
+            source: "openclaw",
+            agent: this.agentName,
+            subAgentLabel: label,
+            model,
+            runId,
+            event: "subagent_completed",
+          },
         ).catch(console.error);
         return;
       }
 
       // ── Sub-agent: failed ────────────────────────────────────────────────
       if (
-        kind === 'subagent_failed' ||
-        kind === 'subagent.failed' ||
-        (kind === 'subagent' && event.status === 'failed')
+        kind === "subagent_failed" ||
+        kind === "subagent.failed" ||
+        (kind === "subagent" && event.status === "failed")
       ) {
-        const label = String(event.label ?? event.subAgentId ?? 'sub-agent');
-        const error = String(event.error ?? event.message ?? '');
+        const label = String(event.label ?? event.subAgentId ?? "sub-agent");
+        const error = String(event.error ?? event.message ?? "");
         postMessage(
           threadId,
-          `agent_failed: ${label}${error ? ` — ${error}` : ''}`,
-          'SYSTEM',
-          'GHOST',
-          { source: 'openclaw', agent: this.agentName, subAgentLabel: label, event: 'subagent_failed' },
+          `agent_failed: ${label}${error ? ` — ${error}` : ""}`,
+          "SYSTEM",
+          "GHOST",
+          {
+            source: "openclaw",
+            agent: this.agentName,
+            subAgentLabel: label,
+            event: "subagent_failed",
+          },
         ).catch(console.error);
         return;
       }
 
       // ── Memory write detection ───────────────────────────────────────────
-      const filePath = String(event.path ?? event.filePath ?? event.file ?? '');
+      const filePath = String(event.path ?? event.filePath ?? event.file ?? "");
       const isMemoryWrite =
-        (kind === 'tool_use' || kind === 'tool_result' || kind === 'tool_call') &&
-        (event.tool === 'write' || event.tool === 'edit' || event.tool === 'create') &&
+        (kind === "tool_use" ||
+          kind === "tool_result" ||
+          kind === "tool_call") &&
+        (event.tool === "write" ||
+          event.tool === "edit" ||
+          event.tool === "create") &&
         /[\\/]memory[\\/]|[\\/]MEMORY\.md/i.test(filePath);
 
       if (isMemoryWrite) {
         const content = String(event.content ?? event.text ?? filePath);
         console.log(`[${this.agentName}] Memory write detected: ${filePath}`);
         createMemoryChip(threadId, content.slice(0, 500), {
-          source: 'openclaw-auto',
+          source: "openclaw-auto",
           agent: this.agentName,
           filePath,
-          event: 'memory_write',
+          event: "memory_write",
         }).catch(console.error);
         return;
       }
 
       // ── Cost / usage event ───────────────────────────────────────────────
       const hasTokenData =
-        typeof event.inputTokens === 'number' ||
-        typeof event.outputTokens === 'number' ||
-        typeof event.tokensUsed === 'number' ||
-        typeof event.totalTokens === 'number';
+        typeof event.inputTokens === "number" ||
+        typeof event.outputTokens === "number" ||
+        typeof event.tokensUsed === "number" ||
+        typeof event.totalTokens === "number";
 
-      if (kind === 'usage' || kind === 'cost' || kind === 'token_usage' || hasTokenData) {
+      if (
+        kind === "usage" ||
+        kind === "cost" ||
+        kind === "token_usage" ||
+        hasTokenData
+      ) {
         const inputTokens = Number(event.inputTokens ?? 0);
-        const outputTokens = Number(event.outputTokens ?? event.tokensUsed ?? event.totalTokens ?? 0);
+        const outputTokens = Number(
+          event.outputTokens ?? event.tokensUsed ?? event.totalTokens ?? 0,
+        );
         const tokens = inputTokens + outputTokens;
-        const costUsd = typeof event.costUsd === 'number' ? event.costUsd : tokens * 0.000003; // rough fallback
-        const model = String(event.model ?? 'unknown');
+        const costUsd =
+          typeof event.costUsd === "number" ? event.costUsd : tokens * 0.000003; // rough fallback
+        const model = String(event.model ?? "unknown");
 
-        console.log(`[${this.agentName}] Cost event: ${tokens} tokens, $${costUsd.toFixed(6)}, model=${model}`);
-        postCostEntry(threadId, `${this.agentName}:${model}`, tokens, costUsd).catch(console.error);
+        console.log(
+          `[${this.agentName}] Cost event: ${tokens} tokens, $${costUsd.toFixed(6)}, model=${model}`,
+        );
+        postCostEntry(
+          threadId,
+          `${this.agentName}:${model}`,
+          tokens,
+          costUsd,
+        ).catch(console.error);
         return;
       }
 
       // ── Streaming chat text ──────────────────────────────────────────────
-      if (stream.startsWith('stream:') && text) {
+      if (stream.startsWith("stream:") && text) {
         postMessage(
           threadId,
           `agent_progress: ${this.agentName} — ${text}`,
-          'SYSTEM',
-          'GHOST',
-          { source: 'openclaw', agent: this.agentName },
+          "SYSTEM",
+          "GHOST",
+          { source: "openclaw", agent: this.agentName },
         ).catch(console.error);
       }
     } catch (err) {
-      console.error(`[${this.agentName}] handleRpcEvent error:`, (err as Error).message);
+      console.error(
+        `[${this.agentName}] handleRpcEvent error:`,
+        (err as Error).message,
+      );
     }
   }
 }
@@ -703,7 +883,10 @@ class OpenClawBridgeAgent {
  *  2. Title contains "@agentname"
  *  3. Default: first agent in config array
  */
-function resolveAgentForTitle(title: string, configs: AgentConfig[]): AgentConfig {
+function resolveAgentForTitle(
+  title: string,
+  configs: AgentConfig[],
+): AgentConfig {
   const lower = title.toLowerCase();
   for (const cfg of configs) {
     const name = cfg.name.toLowerCase();
@@ -717,8 +900,10 @@ function resolveAgentForTitle(title: string, configs: AgentConfig[]): AgentConfi
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  console.log('[bridge] Starting OpenClaw bridge (Phase 3 — bidirectional)');
-  console.log(`[bridge] Agents: ${AGENT_CONFIGS.map((c) => `${c.name}@${c.url}`).join(', ')}`);
+  console.log("[bridge] Starting OpenClaw bridge (Phase 3 — bidirectional)");
+  console.log(
+    `[bridge] Agents: ${AGENT_CONFIGS.map((c) => `${c.name}@${c.url}`).join(", ")}`,
+  );
   console.log(`[bridge] ClawChat: ${CLAWCHAT_URL}`);
 
   // Instantiate one bridge agent per config
@@ -730,7 +915,10 @@ async function main(): Promise<void> {
   // Ensure each agent has at least its activity thread
   for (const [name, agent] of agents) {
     const cfg = AGENT_CONFIGS.find((c) => c.name === name)!;
-    const title = AGENT_CONFIGS.length === 1 ? ACTIVITY_THREAD_TITLE : `[${name}] ${ACTIVITY_THREAD_TITLE}`;
+    const title =
+      AGENT_CONFIGS.length === 1
+        ? ACTIVITY_THREAD_TITLE
+        : `[${name}] ${ACTIVITY_THREAD_TITLE}`;
 
     let threadId: string | undefined;
     for (let attempt = 1; ; attempt++) {
@@ -739,8 +927,14 @@ async function main(): Promise<void> {
         console.log(`[bridge] [${name}] Activity thread: ${threadId}`);
         break;
       } catch (err) {
-        console.error(`[bridge] [${name}] Thread setup attempt ${attempt} failed:`, (err as Error).message);
-        if (attempt >= 10) { console.error('[bridge] Giving up'); process.exit(1); }
+        console.error(
+          `[bridge] [${name}] Thread setup attempt ${attempt} failed:`,
+          (err as Error).message,
+        );
+        if (attempt >= 10) {
+          console.error("[bridge] Giving up");
+          process.exit(1);
+        }
         await new Promise((r) => setTimeout(r, 3_000 * attempt));
       }
     }
@@ -750,11 +944,17 @@ async function main(): Promise<void> {
   }
 
   // Keep alive
-  process.on('SIGINT', () => { console.log('[bridge] Shutting down'); process.exit(0); });
-  process.on('SIGTERM', () => { console.log('[bridge] Shutting down'); process.exit(0); });
+  process.on("SIGINT", () => {
+    console.log("[bridge] Shutting down");
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    console.log("[bridge] Shutting down");
+    process.exit(0);
+  });
 }
 
 main().catch((err) => {
-  console.error('[bridge] Fatal:', err);
+  console.error("[bridge] Fatal:", err);
   process.exit(1);
 });

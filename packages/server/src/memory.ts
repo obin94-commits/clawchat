@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+import crypto from "crypto";
 
 export interface MemoryResult {
   id: string;
@@ -29,26 +29,36 @@ interface OpenAIEmbeddingResponse {
 
 export class MemoryService {
   private readonly qdrantUrl: string;
-  private readonly collection = 'newt_memories';
+  private readonly collection = "newt_memories";
   private readonly openaiKey: string;
+  private warningLogged = false;
 
   constructor() {
-    this.qdrantUrl = process.env.QDRANT_URL ?? 'http://100.93.134.22:6333';
-    this.openaiKey = process.env.OPENAI_API_KEY ?? '';
+    this.qdrantUrl = process.env.QDRANT_URL ?? "http://100.93.134.22:6333";
+    this.openaiKey = process.env.OPENAI_API_KEY ?? "";
   }
 
-  private async embed(text: string): Promise<number[]> {
-    const res = await fetch('https://api.openai.com/v1/embeddings', {
-      method: 'POST',
+  private async embed(text: string): Promise<number[] | null> {
+    if (!this.openaiKey) {
+      if (!this.warningLogged) {
+        console.warn("[memory] OPENAI_API_KEY not set, skipping embeddings");
+        this.warningLogged = true;
+      }
+      return null;
+    }
+    const res = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
         Authorization: `Bearer ${this.openaiKey}`,
       },
-      body: JSON.stringify({ input: text, model: 'text-embedding-3-small' }),
+      body: JSON.stringify({ input: text, model: "text-embedding-3-small" }),
     });
 
     if (!res.ok) {
-      throw new Error(`OpenAI embedding failed: ${res.status} ${await res.text()}`);
+      throw new Error(
+        `OpenAI embedding failed: ${res.status} ${await res.text()}`,
+      );
     }
 
     const data = (await res.json()) as OpenAIEmbeddingResponse;
@@ -57,104 +67,142 @@ export class MemoryService {
 
   async search(query: string, userId: string): Promise<MemoryResult[]> {
     const vector = await this.embed(query);
+    if (!vector) return [];
 
-    const body: Record<string, unknown> = { vector, limit: 10, with_payload: true };
+    const body: Record<string, unknown> = {
+      vector,
+      limit: 10,
+      with_payload: true,
+    };
     if (userId) {
-      body.filter = { must: [{ key: 'userId', match: { value: userId } }] };
+      body.filter = { must: [{ key: "userId", match: { value: userId } }] };
     }
 
     const res = await fetch(
       `${this.qdrantUrl}/collections/${this.collection}/points/search`,
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       },
     );
 
     if (!res.ok) {
-      throw new Error(`Qdrant search failed: ${res.status} ${await res.text()}`);
+      throw new Error(
+        `Qdrant search failed: ${res.status} ${await res.text()}`,
+      );
     }
 
     const data = (await res.json()) as QdrantSearchResponse;
 
     return data.result.map((hit) => ({
       id: String(hit.id),
-      content: hit.payload?.content ?? '',
+      content: hit.payload?.content ?? "",
       score: hit.score,
       category: hit.payload?.category,
       userId: hit.payload?.userId,
     }));
   }
 
-  async store(content: string, userId: string, metadata: Record<string, unknown>): Promise<string> {
+  async store(
+    content: string,
+    userId: string,
+    metadata: Record<string, unknown>,
+  ): Promise<string> {
     const vector = await this.embed(content);
+    if (!vector) {
+      const id = crypto.randomUUID();
+      return id;
+    }
     const id = crypto.randomUUID();
 
-    const res = await fetch(`${this.qdrantUrl}/collections/${this.collection}/points`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        points: [{ id, vector, payload: { content, userId, ...metadata, createdAt: Date.now() } }],
-      }),
-    });
+    const res = await fetch(
+      `${this.qdrantUrl}/collections/${this.collection}/points`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          points: [
+            {
+              id,
+              vector,
+              payload: { content, userId, ...metadata, createdAt: Date.now() },
+            },
+          ],
+        }),
+      },
+    );
 
     if (!res.ok) {
-      throw new Error(`Qdrant upsert failed: ${res.status} ${await res.text()}`);
+      throw new Error(
+        `Qdrant upsert failed: ${res.status} ${await res.text()}`,
+      );
     }
 
     return id;
   }
 
-  async searchMemories(query: string, userId: string, limit = 5): Promise<MemoryResult[]> {
+  async searchMemories(
+    query: string,
+    userId: string,
+    limit = 5,
+  ): Promise<MemoryResult[]> {
     const results = await this.search(query, userId);
     return results.slice(0, limit);
   }
 
-  async addMemory(content: string, userId: string, metadata: Record<string, unknown> = {}): Promise<string> {
+  async addMemory(
+    content: string,
+    userId: string,
+    metadata: Record<string, unknown> = {},
+  ): Promise<string> {
     return this.store(content, userId, metadata);
   }
 
-  async getRelevant(threadId: string, lastMessage: string): Promise<MemoryResult[]> {
+  async getRelevant(
+    threadId: string,
+    lastMessage: string,
+  ): Promise<MemoryResult[]> {
     try {
       const vector = await this.embed(lastMessage);
+      if (!vector) return [];
 
       const body: Record<string, unknown> = {
         vector,
         limit: 10,
         with_payload: true,
         filter: {
-          must: [
-            { key: 'threadId', match: { value: threadId } },
-          ],
+          must: [{ key: "threadId", match: { value: threadId } }],
         },
       };
 
       const res = await fetch(
         `${this.qdrantUrl}/collections/${this.collection}/points/search`,
         {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         },
       );
 
       if (!res.ok) {
-        throw new Error(`Qdrant search failed: ${res.status} ${await res.text()}`);
+        throw new Error(
+          `Qdrant search failed: ${res.status} ${await res.text()}`,
+        );
       }
 
       const data = (await res.json()) as QdrantSearchResponse;
       return data.result
         .map((hit) => ({
           id: String(hit.id),
-          content: hit.payload?.content ?? '',
+          content: hit.payload?.content ?? "",
           score: hit.score,
           category: hit.payload?.category,
           userId: hit.payload?.userId,
         }))
         .filter((r) => r.score > 0.7);
     } catch (error) {
-      console.error('[memory] getRelevant failed:', error);
+      console.error("[memory] getRelevant failed:", error);
       return [];
     }
   }
