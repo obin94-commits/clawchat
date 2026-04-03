@@ -12,6 +12,7 @@ model Thread {
   title                 String       @default("Untitled")
   parentThreadId        String?
   branchedFromMessageId String?
+  pinned               Boolean      @default(false)
   createdAt             DateTime     @default(now())
   updatedAt             DateTime     @updatedAt
   messages              Message[]
@@ -20,6 +21,7 @@ model Thread {
   parentThread          Thread?      @relation("ThreadBranches", fields: [parentThreadId], references: [id])
   childThreads          Thread[]     @relation("ThreadBranches")
 
+  @@index([pinned, updatedAt])
   @@index([updatedAt])
   @@index([parentThreadId])
 }
