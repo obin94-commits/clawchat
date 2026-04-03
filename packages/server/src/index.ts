@@ -793,11 +793,15 @@ app.post("/threads/:id/relay", async (req, res, next) => {
       payload: { message: agentMessage },
     } as unknown as WsServerEvent);
 
-    // Extract usage and save cost
+    // Extract usage and save cost (estimate if API returns zeros)
     const usage = (agentData as any).usage;
-    if (usage) {
-      const tokens = (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
-      const costUsd = (usage.prompt_tokens ?? 0) * 0.000003 + (usage.completion_tokens ?? 0) * 0.000015;
+    const rawInput = usage?.prompt_tokens ?? 0;
+    const rawOutput = usage?.completion_tokens ?? 0;
+    const estimatedInput = rawInput > 0 ? rawInput : Math.ceil(content.length / 4);
+    const estimatedOutput = rawOutput > 0 ? rawOutput : Math.ceil(agentContent.length / 4);
+    {
+      const tokens = estimatedInput + estimatedOutput;
+      const costUsd = estimatedInput * 0.000003 + estimatedOutput * 0.000015;
       await prisma.costEntry.create({
         data: { threadId, agentId: "openclaw", tokens, costUsd },
       });
