@@ -6,6 +6,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { Audio, Recording, Sound } from "expo-av";
 import {
   Alert,
   Animated,
@@ -343,6 +344,14 @@ function ThreadDetailContent() {
   const [memoryPanelVisible, setMemoryPanelVisible] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+
+  // Voice recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingUri, setRecordingUri] = useState<string | null>(null);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const recordingRef = useRef<any>(null);
+  const recordingTimer = useRef<NodeJS.Timeout | null>(null);
+  const playingSound = useRef<Sound | null>(null);
 
   // Long-press menu
   const [menuVisible, setMenuVisible] = useState(false);
@@ -760,6 +769,116 @@ function ThreadDetailContent() {
     settings.apiKey,
   ]);
 
+  const startRecording = useCallback(async () => {
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        stayAwake: true,
+      });
+
+      const { recording } = await Recording.createRecordingAsync();
+      recordingRef.current = recording;
+      setIsRecording(true);
+      setRecordingUri(null);
+      setRecordingDuration(0);
+
+      // Update duration every 100ms
+      recordingTimer.current = setInterval(() => {
+        setRecordingDuration((prev) => prev + 0.1);
+      }, 100);
+    } catch (error) {
+      console.error("Failed to start recording:", error);
+      setIsRecording(false);
+    }
+  }, []);
+
+  const stopRecording = useCallback(async () => {
+    if (recordingTimer.current) {
+      clearInterval(recordingTimer.current);
+      recordingTimer.current = null;
+    }
+
+    try {
+      const { uri } = await recordingRef.current.stopAndUnloadAsync();
+      const duration = recordingDuration;
+
+      setRecordingUri(uri as string);
+      setIsRecording(false);
+
+      // Send voice message
+      const metadata = {
+        type: "voice",
+        uri: uri as string,
+        duration: Math.floor(duration),
+      };
+
+      try {
+        const socket = socketRef.current;
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(
+            JSON.stringify({
+              type: "send_message",
+              threadId,
+              content: "",
+              metadata,
+            }),
+          );
+        } else {
+          const response = await fetchWithAuth(
+            `${SERVER_URL}/threads/${threadId}/messages`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content: "", metadata }),
+            },
+            settings.apiKey,
+          );
+          const message = (await response.json()) as Message;
+          setMessages((current) => [...current, message]);
+        }
+        scrollToBottom();
+      } catch (error) {
+        console.error("Failed to send voice message:", error);
+      }
+    } catch (error) {
+      console.error("Failed to stop recording:", error);
+      setIsRecording(false);
+    }
+  }, [
+    recordingDuration,
+    threadId,
+    SERVER_URL,
+    socketRef,
+    settings.apiKey,
+    scrollToBottom,
+  ]);
+
+  const playVoiceMessage = useCallback(async (uri: string) => {
+    // Stop any currently playing sound
+    if (playingSound.current) {
+      await playingSound.current.stopAsync();
+      await playingSound.current.unloadAsync();
+    }
+
+    try {
+      const newSound = new Sound();
+      await newSound.loadAsync({ uri });
+      await newSound.playAsync();
+      playingSound.current = newSound;
+
+      // Clean up when done playing
+      newSound.setOnPlaybackStatusUpdateAsync((status) => {
+        if (status.isFinished) {
+          newSound.unloadAsync().catch(() => {});
+          playingSound.current = null;
+        }
+      });
+    } catch (error) {
+      console.error("Failed to play voice message:", error);
+    }
+  }, []);
+
   const handleBranchFromMessage = useCallback((message: Message) => {
     setBranchingMessage(message);
     setShowBranchModal(true);
@@ -974,6 +1093,59 @@ function ThreadDetailContent() {
           const isRemember = isRememberMessage(item.content);
           const isUser = item.role === "USER";
 
+          // Check if this is a voice message
+          let isVoice = false;
+          let voiceUri = "";
+          let voiceDuration = 0;
+          if (item.metadata) {
+            try {
+              const meta = JSON.parse(item.metadata);
+              if (meta.type === "voice") {
+                isVoice = true;
+                voiceUri = meta.uri || "";
+                voiceDuration = meta.duration || 0;
+              }
+            } catch {}
+          }
+
+          if (isVoice) {
+            const minutes = Math.floor(voiceDuration / 60);
+            const seconds = Math.floor(voiceDuration % 60);
+            const durationStr = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+
+            return (
+              <Pressable
+                onPress={() => playVoiceMessage(voiceUri)}
+                style={[
+                  s.messageBubble,
+                  {
+                    backgroundColor: isUser
+                      ? theme.bubbleUser
+                      : theme.bubbleAgent,
+                    alignSelf: isUser ? "flex-end" : "flex-start",
+                  },
+                  s.voiceBubble,
+                ]}
+              >
+                <View style={s.voiceContent}>
+                  <Text style={s.playIcon}>▶</Text>
+                  <Text
+                    style={[
+                      s.voiceDuration,
+                      {
+                        color: isUser
+                          ? theme.bubbleTextUser
+                          : theme.bubbleTextAgent,
+                      },
+                    ]}
+                  >
+                    {durationStr}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          }
+
           if (isRemember) {
             const memText = item.content.replace(/^\/remember\s+/i, "").trim();
             return (
@@ -1156,9 +1328,25 @@ function ThreadDetailContent() {
           style={s.input}
           multiline
           maxLength={4000}
+          editable={!isRecording}
         />
-        <Pressable onPress={sendMessage} style={s.sendButton}>
+        <Pressable
+          onPressIn={() => !isRecording && startRecording()}
+          onPressOut={() => isRecording && stopRecording()}
+          style={[
+            s.sendButton,
+            { backgroundColor: isRecording ? theme.error : theme.accent },
+          ]}
+          disabled={isRecording}
+        >
           <Text style={s.sendButtonText}>↑</Text>
+        </Pressable>
+        <Pressable
+          onPressIn={startRecording}
+          onPressOut={() => isRecording && stopRecording()}
+          style={s.micButton}
+        >
+          <Text style={s.micButtonText}>{isRecording ? "●" : "🎤"}</Text>
         </Pressable>
       </View>
 
@@ -1401,6 +1589,37 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     sendButtonText: {
       color: "#fff",
       fontWeight: "700",
+      fontSize: 18,
+    },
+    voiceBubble: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      minWidth: 80,
+    },
+    voiceContent: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+    },
+    playIcon: {
+      fontSize: 20,
+      color: theme.accent,
+      fontWeight: "600",
+    },
+    voiceDuration: {
+      fontSize: 13,
+      fontWeight: "500",
+    },
+    micButton: {
+      backgroundColor: theme.accent,
+      borderRadius: 20,
+      width: 40,
+      height: 40,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    micButtonText: {
       fontSize: 18,
     },
   });

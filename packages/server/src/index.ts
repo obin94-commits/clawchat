@@ -423,7 +423,9 @@ app.post("/threads/:id/messages", async (req, res, next) => {
       ? JSON.stringify(req.body.metadata)
       : null;
 
-    if (!content) {
+    // Allow empty content for voice messages
+    const isVoiceMessage = metadata && JSON.parse(metadata).type === "voice";
+    if (!content && !isVoiceMessage) {
       res
         .status(400)
         .json({ error: "content is required", code: "MISSING_CONTENT" });
