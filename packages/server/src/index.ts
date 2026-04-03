@@ -696,6 +696,105 @@ app.post("/threads/:id/messages/webhook", async (req, res, next) => {
   }
 });
 
+// ─── Agent relay endpoint ────────────────────────────────────────────────────
+
+/**
+ * POST /threads/:id/relay
+ * Accepts a user message, forwards it to OpenClaw agent via HTTP,
+ * and returns the agent's response.
+ * Body: { content: string }
+ */
+app.post("/threads/:id/relay", async (req, res, next) => {
+  try {
+    const threadId = req.params.id;
+    let content =
+      typeof req.body?.content === "string" ? req.body.content.trim() : "";
+
+    if (!content) {
+      res
+        .status(400)
+        .json({ error: "content is required", code: "MISSING_CONTENT" });
+      return;
+    }
+
+    // Truncate to 100KB if necessary
+    content = content.slice(0, 100_000);
+
+    // Save user message
+    const userMessage = await prisma.message.create({
+      data: { threadId, content, role: "USER", displayType: "VISIBLE" },
+    });
+
+    await prisma.thread.update({
+      where: { id: threadId },
+      data: { updatedAt: new Date() },
+    });
+
+    // Broadcast user message
+    broadcastToThread(threadId, {
+      type: "message.new",
+      threadId,
+      payload: { message: userMessage },
+    } as unknown as WsServerEvent);
+
+    // Forward to OpenClaw agent via HTTP
+    const openClawUrl =
+      process.env.OPENCLAW_API_URL ??
+      "http://localhost:18789/v1/chat/completions";
+    const openClawToken = process.env.OPENCLAW_API_TOKEN ?? "";
+
+    const agentResponse = await fetch(openClawUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(openClawToken ? { Authorization: `Bearer ${openClawToken}` } : {}),
+      },
+      body: JSON.stringify({
+        model: "openclaw:main",
+        messages: [{ role: "user", content }],
+        max_tokens: 2000,
+      }),
+    });
+    if (!agentResponse.ok) {
+      const errorText = await agentResponse.text();
+      throw new Error(
+        `OpenClaw API error: ${agentResponse.status} ${errorText}`,
+      );
+    }
+
+    const agentData = (await agentResponse.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      content?: string;
+    };
+    const agentContent =
+      agentData.choices?.[0]?.message?.content ?? agentData.content ?? "";
+    // Save agent response as AGENT message
+    const agentMessage = await prisma.message.create({
+      data: {
+        threadId,
+        content: agentContent,
+        role: "AGENT",
+        displayType: "VISIBLE",
+      },
+    });
+
+    // Broadcast agent message
+    broadcastToThread(threadId, {
+      type: "message.new",
+      threadId,
+      payload: { message: agentMessage },
+    } as unknown as WsServerEvent);
+
+    // Return both messages
+    res.status(200).json({
+      userMessage,
+      agentMessage,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ─── SSE subscribe endpoint for inter-agent communication ────────────────────
 
 /**
