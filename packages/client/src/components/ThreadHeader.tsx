@@ -2,6 +2,7 @@ import React from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import type { MemoryChip } from '@clawchat/shared';
 import MemoryChipComponent from './MemoryChip';
+import { useTheme } from '../ThemeContext';
 
 interface Props {
   pinnedChips: MemoryChip[];
@@ -9,12 +10,13 @@ interface Props {
 }
 
 export default function ThreadHeader({ pinnedChips, onUnpin }: Props) {
+  const { theme } = useTheme();
   if (pinnedChips.length === 0) return null;
 
   const visible = pinnedChips.slice(0, 3);
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { borderBottomColor: theme.border, backgroundColor: theme.surface }]}>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -35,8 +37,6 @@ export default function ThreadHeader({ pinnedChips, onUnpin }: Props) {
 const styles = StyleSheet.create({
   container: {
     borderBottomWidth: 1,
-    borderColor: '#E3F2FD',
-    backgroundColor: '#F8FBFF',
     paddingVertical: 6,
   },
   scroll: {

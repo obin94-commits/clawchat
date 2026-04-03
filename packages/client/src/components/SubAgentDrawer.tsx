@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import type { AgentRunInfo } from '@clawchat/shared';
+import { useTheme } from '../ThemeContext';
 
 interface Props {
   visible: boolean;
@@ -16,18 +17,6 @@ interface Props {
   totalTokens: number;
   totalCost: number;
   onClose: () => void;
-}
-
-function statusColor(status: AgentRunInfo['status']): string {
-  if (status === 'running') return '#007AFF';
-  if (status === 'failed') return '#FF3B30';
-  return '#34C759';
-}
-
-function statusLabel(status: AgentRunInfo['status']): string {
-  if (status === 'running') return 'running';
-  if (status === 'failed') return 'failed';
-  return 'done';
 }
 
 function runtime(agent: AgentRunInfo): string {
@@ -38,6 +27,7 @@ function runtime(agent: AgentRunInfo): string {
 }
 
 export default function SubAgentDrawer({ visible, agents, totalTokens, totalCost, onClose }: Props) {
+  const { theme } = useTheme();
   const slideAnim = useRef(new Animated.Value(300)).current;
 
   useEffect(() => {
@@ -50,18 +40,28 @@ export default function SubAgentDrawer({ visible, agents, totalTokens, totalCost
 
   const runningCount = agents.filter((a) => a.status === 'running').length;
 
+  function statusColor(status: AgentRunInfo['status']): string {
+    if (status === 'running') return theme.info;
+    if (status === 'failed') return theme.error;
+    return theme.success;
+  }
+
+  function statusLabel(status: AgentRunInfo['status']): string {
+    if (status === 'running') return 'running';
+    if (status === 'failed') return 'failed';
+    return 'done';
+  }
+
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose} />
-      <Animated.View style={[styles.sheet, { transform: [{ translateY: slideAnim }] }]}>
-        {/* Handle */}
-        <View style={styles.handle} />
+      <Animated.View style={[styles.sheet, { backgroundColor: theme.drawerBg, transform: [{ translateY: slideAnim }] }]}>
+        <View style={[styles.handle, { backgroundColor: theme.border }]} />
 
-        {/* Header */}
-        <View style={styles.header}>
+        <View style={[styles.header, { borderBottomColor: theme.border }]}>
           <View>
-            <Text style={styles.title}>Agents</Text>
-            <Text style={styles.subtitle}>
+            <Text style={[styles.title, { color: theme.text }]}>Agents</Text>
+            <Text style={[styles.subtitle, { color: theme.textMuted }]}>
               {runningCount > 0 ? `${runningCount} running` : 'All idle'}
               {' · '}
               {totalTokens.toLocaleString()} tokens
@@ -70,33 +70,32 @@ export default function SubAgentDrawer({ visible, agents, totalTokens, totalCost
             </Text>
           </View>
           <Pressable onPress={onClose} style={styles.closeButton}>
-            <Text style={styles.closeText}>Done</Text>
+            <Text style={[styles.closeText, { color: theme.accent }]}>Done</Text>
           </Pressable>
         </View>
 
-        {/* Agent list */}
         <ScrollView contentContainerStyle={styles.list}>
           {agents.length === 0 ? (
-            <Text style={styles.emptyText}>No agents tracked in this session.</Text>
+            <Text style={[styles.emptyText, { color: theme.textMuted }]}>No agents tracked in this session.</Text>
           ) : (
             agents.map((agent) => (
               <View key={agent.runId} style={styles.row}>
                 <View style={[styles.statusDot, { backgroundColor: statusColor(agent.status) }]} />
                 <View style={styles.rowBody}>
                   <View style={styles.rowTop}>
-                    <Text style={styles.agentName}>{agent.agentName}</Text>
+                    <Text style={[styles.agentName, { color: theme.text }]}>{agent.agentName}</Text>
                     <Text style={[styles.statusBadge, { color: statusColor(agent.status) }]}>
                       {statusLabel(agent.status)}
                     </Text>
                   </View>
                   <View style={styles.rowMeta}>
-                    <Text style={styles.metaText}>{runtime(agent)}</Text>
+                    <Text style={[styles.metaText, { color: theme.textMuted }]}>{runtime(agent)}</Text>
                     {agent.lastAction ? (
-                      <Text style={styles.metaText} numberOfLines={1}>
+                      <Text style={[styles.metaText, { color: theme.textMuted }]} numberOfLines={1}>
                         {agent.lastAction}
                       </Text>
                     ) : null}
-                    <Text style={styles.metaCost}>
+                    <Text style={[styles.metaCost, { color: theme.textMuted }]}>
                       {agent.tokens > 0 ? `${agent.tokens.toLocaleString()}t · ` : ''}
                       ${agent.cost.toFixed(4)}
                     </Text>
@@ -114,14 +113,13 @@ export default function SubAgentDrawer({ visible, agents, totalTokens, totalCost
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    backgroundColor: 'rgba(0,0,0,0.55)',
   },
   sheet: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: '#fff',
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingBottom: 40,
@@ -132,7 +130,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#DDD',
     marginTop: 10,
     marginBottom: 4,
   },
@@ -143,16 +140,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderColor: '#F0F0F0',
   },
   title: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#111',
   },
   subtitle: {
     fontSize: 12,
-    color: '#999',
     marginTop: 2,
   },
   closeButton: {
@@ -161,7 +155,6 @@ const styles = StyleSheet.create({
   },
   closeText: {
     fontSize: 16,
-    color: '#007AFF',
     fontWeight: '500',
   },
   list: {
@@ -169,7 +162,6 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   emptyText: {
-    color: '#AAA',
     fontSize: 14,
     textAlign: 'center',
     paddingVertical: 20,
@@ -199,7 +191,6 @@ const styles = StyleSheet.create({
   agentName: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#111',
     flex: 1,
   },
   statusBadge: {
@@ -214,11 +205,9 @@ const styles = StyleSheet.create({
   },
   metaText: {
     fontSize: 12,
-    color: '#888',
   },
   metaCost: {
     fontSize: 12,
-    color: '#888',
     fontVariant: ['tabular-nums'],
     marginLeft: 'auto',
   },

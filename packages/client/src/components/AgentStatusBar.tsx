@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { AgentRunInfo } from '@clawchat/shared';
+import { useTheme } from '../ThemeContext';
 
 export interface AgentStatus {
   status: 'idle' | 'running' | 'failed';
@@ -19,29 +20,26 @@ interface Props {
 }
 
 export default function AgentStatusBar({ agentStatus, agents, threadName, onPress }: Props) {
+  const { theme } = useTheme();
   const [elapsed, setElapsed] = useState(0);
   const dotOpacity = useRef(new Animated.Value(1)).current;
 
-  // Elapsed timer
   useEffect(() => {
     if (agentStatus.status !== 'running' || !agentStatus.startedAt) {
       setElapsed(0);
       return;
     }
-
     const tick = () => setElapsed(Math.floor((Date.now() - (agentStatus.startedAt ?? Date.now())) / 1000));
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, [agentStatus.status, agentStatus.startedAt]);
 
-  // Animated dot pulse
   useEffect(() => {
     if (agentStatus.status !== 'running') {
       dotOpacity.setValue(0);
       return;
     }
-
     const anim = Animated.loop(
       Animated.sequence([
         Animated.timing(dotOpacity, { toValue: 1, duration: 500, useNativeDriver: true }),
@@ -54,9 +52,7 @@ export default function AgentStatusBar({ agentStatus, agents, threadName, onPres
 
   const isRunning = agentStatus.status === 'running';
   const isFailed = agentStatus.status === 'failed';
-
   const runningCount = agents.filter((a) => a.status === 'running').length;
-
   const threadPrefix = threadName ? `${threadName} · ` : '';
 
   let label: string;
@@ -70,25 +66,28 @@ export default function AgentStatusBar({ agentStatus, agents, threadName, onPres
     label = `${threadPrefix}idle`;
   }
 
-  const dotColor = isFailed ? '#FF3B30' : '#007AFF';
+  const dotColor = isFailed ? theme.error : theme.info;
 
   return (
-    <Pressable style={styles.bar} onPress={onPress}>
+    <Pressable
+      style={[styles.bar, { backgroundColor: theme.agentBarBg, borderColor: theme.border }]}
+      onPress={onPress}
+    >
       {(isRunning || isFailed) && (
         <Animated.View
           style={[styles.dot, { backgroundColor: dotColor, opacity: isFailed ? 1 : dotOpacity }]}
         />
       )}
-      <Text style={[styles.label, isRunning && styles.labelActive, isFailed && styles.labelFailed]}>
+      <Text style={[styles.label, { color: theme.textMuted }, isRunning && { color: theme.info }, isFailed && { color: theme.error }]}>
         {label}
       </Text>
       <View style={styles.spacer} />
-      <Text style={styles.costLabel}>
+      <Text style={[styles.costLabel, { color: theme.textFaint }]}>
         {agentStatus.tokens > 0 ? `${agentStatus.tokens.toLocaleString()}t · ` : ''}
         ${agentStatus.cost.toFixed(4)}
       </Text>
       {onPress && (
-        <Text style={styles.chevron}>{isRunning || isFailed ? '›' : ''}</Text>
+        <Text style={[styles.chevron, { color: theme.textFaint }]}>{isRunning || isFailed ? '›' : ''}</Text>
       )}
     </Pressable>
   );
@@ -100,9 +99,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 5,
-    backgroundColor: '#FAFAFA',
     borderTopWidth: 1,
-    borderColor: '#EEE',
     gap: 6,
   },
   dot: {
@@ -112,25 +109,16 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 12,
-    color: '#999',
-  },
-  labelActive: {
-    color: '#007AFF',
-  },
-  labelFailed: {
-    color: '#FF3B30',
   },
   spacer: {
     flex: 1,
   },
   costLabel: {
     fontSize: 11,
-    color: '#AAA',
     fontVariant: ['tabular-nums'],
   },
   chevron: {
     fontSize: 16,
-    color: '#CCC',
     lineHeight: 18,
   },
 });

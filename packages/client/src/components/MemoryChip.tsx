@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { MemoryChip as MemoryChipType } from '@clawchat/shared';
+import { useTheme } from '../ThemeContext';
 
 interface Props {
   chip: MemoryChipType;
@@ -13,6 +14,7 @@ interface Props {
 type Mode = 'pill' | 'expanded' | 'options';
 
 export default function MemoryChip({ chip, onPin, onDelete, onDismiss, onTap }: Props) {
+  const { theme } = useTheme();
   const [mode, setMode] = useState<Mode>('pill');
 
   const scorePercent = Math.round(chip.score * 100);
@@ -26,25 +28,31 @@ export default function MemoryChip({ chip, onPin, onDelete, onDismiss, onTap }: 
 
   const handleLongPress = () => setMode('options');
 
+  const pillStyle = [
+    styles.pill,
+    { backgroundColor: theme.chipBg },
+    chip.pinned && { backgroundColor: theme.chipPinnedBg, borderWidth: 1, borderColor: theme.chipPinnedBorder },
+  ];
+
   if (mode === 'options') {
     return (
-      <View style={[styles.pill, chip.pinned && styles.pillPinned, styles.optionsContainer]}>
-        <Text style={styles.optionsLabel} numberOfLines={1}>{truncated}</Text>
+      <View style={[...pillStyle, styles.optionsContainer]}>
+        <Text style={[styles.optionsLabel, { color: theme.textMuted }]} numberOfLines={1}>{truncated}</Text>
         <View style={styles.actions}>
           <Pressable
             onPress={() => { onPin?.(chip); setMode('pill'); }}
-            style={styles.actionBtn}
+            style={[styles.actionBtn, { backgroundColor: theme.primary }]}
           >
-            <Text style={styles.actionText}>{chip.pinned ? 'Unpin' : 'Pin to header'}</Text>
+            <Text style={[styles.actionText, { color: theme.chipText }]}>{chip.pinned ? 'Unpin' : 'Pin to header'}</Text>
           </Pressable>
           <Pressable
             onPress={() => { onDelete?.(chip); }}
-            style={[styles.actionBtn, styles.deleteBtn]}
+            style={[styles.actionBtn, { backgroundColor: theme.primary }]}
           >
-            <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
+            <Text style={[styles.actionText, { color: theme.error }]}>Delete</Text>
           </Pressable>
-          <Pressable onPress={() => setMode('pill')} style={styles.actionBtn}>
-            <Text style={styles.actionText}>Cancel</Text>
+          <Pressable onPress={() => setMode('pill')} style={[styles.actionBtn, { backgroundColor: theme.primary }]}>
+            <Text style={[styles.actionText, { color: theme.textMuted }]}>Cancel</Text>
           </Pressable>
         </View>
       </View>
@@ -53,47 +61,37 @@ export default function MemoryChip({ chip, onPin, onDelete, onDismiss, onTap }: 
 
   if (mode === 'expanded') {
     return (
-      <Pressable
-        onPress={handlePress}
-        onLongPress={handleLongPress}
-        style={[styles.pill, chip.pinned && styles.pillPinned]}
-      >
-        <Text style={styles.fullContent}>{chip.content}</Text>
+      <Pressable onPress={handlePress} onLongPress={handleLongPress} style={pillStyle}>
+        <Text style={[styles.fullContent, { color: theme.chipText }]}>{chip.content}</Text>
         {(chip.category || chip.createdAt) && (
-          <Text style={styles.meta}>
+          <Text style={[styles.meta, { color: theme.textFaint }]}>
             {[
               chip.category,
               chip.createdAt ? new Date(chip.createdAt).toLocaleDateString() : undefined,
               `${scorePercent}%`,
-            ]
-              .filter(Boolean)
-              .join(' · ')}
+            ].filter(Boolean).join(' · ')}
           </Text>
         )}
         <View style={styles.actions}>
-          <Pressable onPress={() => { onPin?.(chip); setMode('pill'); }} style={styles.actionBtn}>
-            <Text style={styles.actionText}>{chip.pinned ? 'Unpin' : 'Pin'}</Text>
-          </Pressable>
-          <Pressable onPress={() => onDelete?.(chip)} style={[styles.actionBtn, styles.deleteBtn]}>
-            <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
-          </Pressable>
-          <Pressable onPress={() => onDismiss?.(chip)} style={styles.actionBtn}>
-            <Text style={styles.actionText}>Dismiss</Text>
-          </Pressable>
+          {[
+            { label: chip.pinned ? 'Unpin' : 'Pin', action: () => { onPin?.(chip); setMode('pill'); } },
+            { label: 'Delete', action: () => onDelete?.(chip), danger: true },
+            { label: 'Dismiss', action: () => onDismiss?.(chip) },
+          ].map(({ label, action, danger }) => (
+            <Pressable key={label} onPress={action} style={[styles.actionBtn, { backgroundColor: theme.primary }]}>
+              <Text style={[styles.actionText, { color: danger ? theme.error : theme.chipText }]}>{label}</Text>
+            </Pressable>
+          ))}
         </View>
       </Pressable>
     );
   }
 
   return (
-    <Pressable
-      onPress={handlePress}
-      onLongPress={handleLongPress}
-      style={[styles.pill, chip.pinned && styles.pillPinned]}
-    >
-      <Text style={styles.label} numberOfLines={1}>
+    <Pressable onPress={handlePress} onLongPress={handleLongPress} style={pillStyle}>
+      <Text style={[styles.label, { color: theme.chipText }]} numberOfLines={1}>
         {truncated}
-        <Text style={styles.score}> {scorePercent}%</Text>
+        <Text style={[styles.score, { color: theme.accent }]}> {scorePercent}%</Text>
       </Text>
     </Pressable>
   );
@@ -101,43 +99,32 @@ export default function MemoryChip({ chip, onPin, onDelete, onDismiss, onTap }: 
 
 const styles = StyleSheet.create({
   pill: {
-    backgroundColor: '#E8F4FD',
     borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 5,
     alignSelf: 'flex-start',
     maxWidth: 300,
   },
-  pillPinned: {
-    backgroundColor: '#BBDEFB',
-    borderWidth: 1,
-    borderColor: '#90CAF9',
-  },
   optionsContainer: {
     maxWidth: 320,
   },
   optionsLabel: {
     fontSize: 11,
-    color: '#555',
     marginBottom: 6,
   },
   label: {
     fontSize: 12,
-    color: '#1565C0',
   },
   score: {
     fontSize: 11,
-    color: '#42A5F5',
     fontWeight: '600',
   },
   fullContent: {
     fontSize: 13,
-    color: '#0D47A1',
     marginBottom: 4,
   },
   meta: {
     fontSize: 11,
-    color: '#5C6BC0',
     marginBottom: 6,
   },
   actions: {
@@ -148,18 +135,10 @@ const styles = StyleSheet.create({
   actionBtn: {
     paddingHorizontal: 8,
     paddingVertical: 3,
-    backgroundColor: '#fff',
     borderRadius: 8,
   },
   actionText: {
     fontSize: 11,
-    color: '#1565C0',
     fontWeight: '600',
-  },
-  deleteBtn: {
-    backgroundColor: '#FFEBEE',
-  },
-  deleteText: {
-    color: '#C62828',
   },
 });
