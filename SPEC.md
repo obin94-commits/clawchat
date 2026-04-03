@@ -134,7 +134,16 @@ packages/
 - Connect to @Nemo_Newt_Bot via ClawChat
 - Fix everything that breaks
 
-### Phase 5: OpenClaw Plugin
+### Phase 5: Voice & Audio
+- Voice messages (record, send, transcribe via Whisper)
+- Push-to-talk mode for hands-free agent interaction
+- Background audio listening — agent can listen to meetings/calls and take notes
+- Join meeting ability — connect to Google Meet/Zoom audio as a participant
+- Live transcription stream with agent annotations
+- Voice reply from agent (ElevenLabs TTS or local)
+- Wake word detection for always-on assistant mode
+
+### Phase 6: OpenClaw Plugin
 - Package as `@clawchat/openclaw-channel`
 - Any OpenClaw instance can add ClawChat as a channel
 - Config: `channels.clawchat.enabled: true, port: 3001`

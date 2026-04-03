@@ -39,6 +39,7 @@ import { ErrorBoundary } from "../components/ErrorBoundary";
 import { useTheme } from "../ThemeContext";
 import { useSettings } from "../SettingsContext";
 import { fetchWithAuth } from "../fetchWithAuth";
+import TextInputModal from "../components/TextInputModal";
 
 type ThreadDetailRoute = RouteProp<RootStackParamList, "ThreadDetail">;
 type ThreadDetailNav = NativeStackNavigationProp<
@@ -307,6 +308,12 @@ function ThreadDetailContent() {
   // Long-press menu
   const [menuVisible, setMenuVisible] = useState(false);
   const [menuMessage, setMenuMessage] = useState<Message | null>(null);
+
+  // Branch modal
+  const [showBranchModal, setShowBranchModal] = useState(false);
+  const [branchingMessage, setBranchingMessage] = useState<Message | null>(
+    null,
+  );
 
   // Pagination
   const [cursor, setCursor] = useState<string | null>(null);
@@ -681,44 +688,45 @@ function ThreadDetailContent() {
     settings.apiKey,
   ]);
 
-  const handleBranchFromMessage = useCallback(
-    async (message: Message) => {
-      Alert.prompt(
-        "Branch from here",
-        "Name for the new branch thread:",
-        async (branchTitle) => {
-          try {
-            const res = await fetchWithAuth(
-              `${SERVER_URL}/threads/${threadId}/branch`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  messageId: message.id,
-                  title: branchTitle || undefined,
-                }),
-              },
-              settings.apiKey,
-            );
-            if (!res.ok) {
-              Alert.alert("Error", "Failed to create branch");
-              return;
-            }
-            const childThread = await res.json();
-            navigation.push("ThreadDetail", {
-              threadId: childThread.id as string,
-              title: childThread.title as string,
-              parentThreadId: threadId,
-              branchedFromMessageId: message.id,
-            });
-          } catch {
-            Alert.alert("Error", "Failed to create branch");
-          }
-        },
-        "plain-text",
-      );
+  const handleBranchFromMessage = useCallback((message: Message) => {
+    setBranchingMessage(message);
+    setShowBranchModal(true);
+  }, []);
+
+  const handleBranchSubmit = useCallback(
+    async (branchTitle: string) => {
+      setShowBranchModal(false);
+      if (!branchingMessage) return;
+
+      try {
+        const res = await fetchWithAuth(
+          `${SERVER_URL}/threads/${threadId}/branch`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              messageId: branchingMessage.id,
+              title: branchTitle || undefined,
+            }),
+          },
+          settings.apiKey,
+        );
+        if (!res.ok) {
+          Alert.alert("Error", "Failed to create branch");
+          return;
+        }
+        const childThread = await res.json();
+        navigation.push("ThreadDetail", {
+          threadId: childThread.id as string,
+          title: childThread.title as string,
+          parentThreadId: threadId,
+          branchedFromMessageId: branchingMessage.id,
+        });
+      } catch {
+        Alert.alert("Error", "Failed to create branch");
+      }
     },
-    [threadId, navigation, SERVER_URL, settings.apiKey],
+    [threadId, navigation, SERVER_URL, settings.apiKey, branchingMessage],
   );
 
   const handlePinChip = useCallback((chip: MemoryChip) => {
@@ -1098,6 +1106,18 @@ function ThreadDetailContent() {
           if (menuMessage) void handleBranchFromMessage(menuMessage);
         }}
         theme={theme}
+      />
+
+      <TextInputModal
+        visible={showBranchModal}
+        title="Branch from here"
+        placeholder="Name for the new branch thread..."
+        onSubmit={handleBranchSubmit}
+        onDismiss={() => {
+          setShowBranchModal(false);
+          setBranchingMessage(null);
+        }}
+        confirmText="Branch"
       />
     </KeyboardAvoidingView>
   );

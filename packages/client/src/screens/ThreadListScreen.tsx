@@ -25,6 +25,7 @@ import { useTheme } from "../ThemeContext";
 import { useSettings } from "../SettingsContext";
 import { fetchWithAuth } from "../fetchWithAuth";
 import { ErrorBoundary } from "../components/ErrorBoundary";
+import TextInputModal from "../components/TextInputModal";
 
 type Navigation = NativeStackNavigationProp<RootStackParamList, "ThreadList">;
 
@@ -43,6 +44,7 @@ function ThreadListContent() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [creating, setCreating] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   const s = makeStyles(theme);
 
@@ -110,9 +112,13 @@ function ThreadListContent() {
     [SERVER_URL, settings.apiKey],
   );
 
-  const handleCreate = useCallback(async () => {
-    Alert.prompt("New Thread", "Thread title:", async (title) => {
-      if (!title?.trim()) return;
+  const handleCreate = useCallback(() => {
+    setShowCreateModal(true);
+  }, []);
+
+  const handleCreateSubmit = useCallback(
+    async (title: string) => {
+      setShowCreateModal(false);
       setCreating(true);
       try {
         const res = await fetchWithAuth(
@@ -137,8 +143,9 @@ function ThreadListContent() {
       } finally {
         setCreating(false);
       }
-    });
-  }, [SERVER_URL, navigation, settings.apiKey]);
+    },
+    [SERVER_URL, navigation, settings.apiKey],
+  );
 
   function highlightText(text: string, query: string) {
     if (!query.trim()) return <Text style={s.threadTitle}>{text}</Text>;
@@ -191,16 +198,26 @@ function ThreadListContent() {
         }
         ListEmptyComponent={
           <View style={s.emptyState}>
-            <Text style={s.emptyEmoji}>💬</Text>
+            <Text style={s.emptyEmoji}>🚀</Text>
             <Text style={s.emptyTitle}>
               {searchQuery
                 ? "No threads match your search"
-                : "Start a new conversation"}
+                : "Welcome to ClawChat!"}
             </Text>
             {!searchQuery && (
-              <Text style={s.emptySubtitle}>
-                Tap + to create your first thread with an AI agent
-              </Text>
+              <>
+                <Text style={s.emptySubtitle}>
+                  Start a conversation with an AI agent to get help with coding,
+                  analysis, and more.
+                </Text>
+                <Pressable
+                  style={s.emptyButton}
+                  onPress={handleCreate}
+                  disabled={creating}
+                >
+                  <Text style={s.emptyButtonText}>Start a conversation</Text>
+                </Pressable>
+              </>
             )}
           </View>
         }
@@ -232,6 +249,14 @@ function ThreadListContent() {
       >
         <Text style={s.fabText}>+</Text>
       </Pressable>
+
+      <TextInputModal
+        visible={showCreateModal}
+        title="New Thread"
+        placeholder="Enter thread title..."
+        onSubmit={handleCreateSubmit}
+        onDismiss={() => setShowCreateModal(false)}
+      />
     </View>
   );
 }
@@ -466,6 +491,24 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       fontSize: 14,
       color: theme.textMuted,
       textAlign: "center",
+      marginBottom: 24,
+    },
+    emptyButton: {
+      backgroundColor: theme.accent,
+      borderRadius: 24,
+      paddingHorizontal: 28,
+      paddingVertical: 14,
+      alignItems: "center",
+      shadowColor: theme.accent,
+      shadowOpacity: 0.4,
+      shadowOffset: { width: 0, height: 4 },
+      shadowRadius: 8,
+      elevation: 4,
+    },
+    emptyButtonText: {
+      color: "#fff",
+      fontSize: 16,
+      fontWeight: "600",
     },
     fab: {
       position: "absolute",
