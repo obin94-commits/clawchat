@@ -42,6 +42,7 @@ import { ErrorBoundary } from "../components/ErrorBoundary";
 import { useTheme } from "../ThemeContext";
 import { useSettings } from "../SettingsContext";
 import { fetchWithAuth } from "../fetchWithAuth";
+import { API_KEY } from "../config";
 import TextInputModal from "../components/TextInputModal";
 
 type ThreadDetailRoute = RouteProp<RootStackParamList, "ThreadDetail">;
@@ -489,7 +490,7 @@ function ThreadDetailContent() {
           messages: Message[];
           nextCursor: string | null;
         };
-        const messages = data.messages;
+        const messages = data.messages.reverse();
         if (cursor) {
           setMessages((prev) => [...messages, ...prev]);
           if (messages.length < 30) setHasMore(false);
@@ -689,7 +690,7 @@ function ThreadDetailContent() {
   );
 
   const { socketRef, retryTimer, wsStatus } = useReconnectingWebSocket(
-    WS_URL,
+    `${WS_URL}?token=${API_KEY}`,
     handleWsMessage,
     threadId,
   );
@@ -1545,7 +1546,11 @@ function ThreadDetailContent() {
           onPress={sendMessage}
           style={[
             s.sendButton,
-            { backgroundColor: input.trim() ? theme.accent : (theme.primary || '#333') },
+            {
+              backgroundColor: input.trim()
+                ? theme.accent
+                : theme.primary || "#333",
+            },
           ]}
           disabled={!input.trim() || isRecording}
         >
