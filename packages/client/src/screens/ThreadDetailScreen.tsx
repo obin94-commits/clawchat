@@ -7,11 +7,13 @@ import React, {
   useState,
 } from "react";
 import { Audio, Recording, Sound } from "expo-av";
+import * as ImagePicker from "expo-image-picker";
 import {
   Alert,
   Animated,
   Clipboard,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -224,6 +226,7 @@ interface MessageMenuProps {
   onCopy: () => void;
   onBranch: () => void;
   onReply: () => void;
+  onReact: () => void;
   theme: ReturnType<typeof useTheme>["theme"];
 }
 
@@ -234,6 +237,7 @@ function MessageMenu({
   onCopy,
   onBranch,
   onReply,
+  onReact,
   theme,
 }: MessageMenuProps) {
   if (!message) return null;
@@ -279,6 +283,7 @@ function MessageMenu({
             { label: "📋  Copy", action: onCopy },
             { label: "↩️  Reply", action: onReply },
             { label: "⤷  Branch from here", action: onBranch },
+            { label: "😀  React", action: onReact },
           ].map(({ label, action }) => (
             <Pressable
               key={label}
@@ -352,6 +357,12 @@ function ThreadDetailContent() {
   const recordingRef = useRef<any>(null);
   const recordingTimer = useRef<NodeJS.Timeout | null>(null);
   const playingSound = useRef<Sound | null>(null);
+
+  // Image attachment state
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+
+  // Reaction picker
+  const [showReactionPicker, setShowReactionPicker] = useState(false);
 
   // Long-press menu
   const [menuVisible, setMenuVisible] = useState(false);
@@ -879,9 +890,90 @@ function ThreadDetailContent() {
     }
   }, []);
 
+  const pickImage = useCallback(async () => {
+    try {
+      const permissionResult =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (permissionResult.granted === false) {
+        Alert.alert(
+          "Permission Required",
+          "Permission to access your photos was denied.",
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaType: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const uri = result.assets[0].uri;
+        setSelectedImage(uri);
+      }
+    } catch (error) {
+      console.error("Failed to pick image:", error);
+      Alert.alert("Error", "Failed to pick image");
+    }
+  }, []);
+
+  const sendImage = useCallback(async () => {
+    if (!selectedImage) return;
+
+    try {
+      const metadata = {
+        type: "image",
+        uri: selectedImage,
+      };
+
+      const socket = socketRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "send_message",
+            threadId,
+            content: "",
+            metadata,
+          }),
+        );
+      } else {
+        const response = await fetchWithAuth(
+          `${SERVER_URL}/threads/${threadId}/messages`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content: "", metadata }),
+          },
+          settings.apiKey,
+        );
+        const message = (await response.json()) as Message;
+        setMessages((current) => [...current, message]);
+      }
+      setSelectedImage(null);
+      scrollToBottom();
+    } catch (error) {
+      console.error("Failed to send image:", error);
+      Alert.alert("Error", "Failed to send image");
+    }
+  }, [
+    selectedImage,
+    threadId,
+    SERVER_URL,
+    socketRef,
+    settings.apiKey,
+    scrollToBottom,
+  ]);
+
   const handleBranchFromMessage = useCallback((message: Message) => {
     setBranchingMessage(message);
     setShowBranchModal(true);
+  }, []);
+
+  const handleReact = useCallback((message: Message) => {
+    setShowReactionPicker(true);
+    setMenuMessage(message);
   }, []);
 
   const handleBranchSubmit = useCallback(
@@ -1097,6 +1189,8 @@ function ThreadDetailContent() {
           let isVoice = false;
           let voiceUri = "";
           let voiceDuration = 0;
+          let isImage = false;
+          let imageUri = "";
           if (item.metadata) {
             try {
               const meta = JSON.parse(item.metadata);
@@ -1104,6 +1198,9 @@ function ThreadDetailContent() {
                 isVoice = true;
                 voiceUri = meta.uri || "";
                 voiceDuration = meta.duration || 0;
+              } else if (meta.type === "image") {
+                isImage = true;
+                imageUri = meta.uri || "";
               }
             } catch {}
           }
@@ -1142,6 +1239,30 @@ function ThreadDetailContent() {
                     {durationStr}
                   </Text>
                 </View>
+              </Pressable>
+            );
+          }
+
+          if (isImage) {
+            return (
+              <Pressable
+                onPress={() => {
+                  ImagePicker.showImagePickerOptionsAsync({
+                    uri: imageUri,
+                  });
+                }}
+                style={[
+                  s.messageBubble,
+                  {
+                    backgroundColor: isUser
+                      ? theme.bubbleUser
+                      : theme.bubbleAgent,
+                    alignSelf: isUser ? "flex-end" : "flex-start",
+                  },
+                  s.imageBubble,
+                ]}
+              >
+                <Image source={{ uri: imageUri }} style={s.imageBubbleImage} />
               </Pressable>
             );
           }
@@ -1319,6 +1440,27 @@ function ThreadDetailContent() {
         </View>
       )}
 
+      {/* Image preview */}
+      {selectedImage && (
+        <View style={s.imagePreviewContainer}>
+          <View style={s.imagePreview}>
+            <Image
+              source={{ uri: selectedImage }}
+              style={s.imagePreviewImage}
+            />
+            <Pressable
+              onPress={() => setSelectedImage(null)}
+              style={s.imagePreviewClose}
+            >
+              <Text style={s.imagePreviewCloseText}>✕</Text>
+            </Pressable>
+          </View>
+          <Pressable onPress={sendImage} style={s.imageSendButton}>
+            <Text style={s.imageSendButtonText}>Send</Text>
+          </Pressable>
+        </View>
+      )}
+
       <View style={s.composer}>
         <TextInput
           value={input}
@@ -1330,6 +1472,9 @@ function ThreadDetailContent() {
           maxLength={4000}
           editable={!isRecording}
         />
+        <Pressable onPress={pickImage} style={s.attachButton}>
+          <Text style={s.attachButtonText}>📎</Text>
+        </Pressable>
         <Pressable
           onPressIn={() => !isRecording && startRecording()}
           onPressOut={() => isRecording && stopRecording()}
@@ -1364,6 +1509,9 @@ function ThreadDetailContent() {
         }}
         onBranch={() => {
           if (menuMessage) void handleBranchFromMessage(menuMessage);
+        }}
+        onReact={() => {
+          if (menuMessage) void handleReact(menuMessage);
         }}
         theme={theme}
       />
@@ -1621,6 +1769,76 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
     },
     micButtonText: {
       fontSize: 18,
+    },
+    imagePreviewContainer: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      padding: 12,
+      backgroundColor: theme.surface,
+      borderTopWidth: 1,
+      borderColor: theme.border,
+    },
+    imagePreview: {
+      width: 80,
+      height: 80,
+      borderRadius: 8,
+      overflow: "hidden",
+      position: "relative",
+    },
+    imagePreviewImage: {
+      width: 80,
+      height: 80,
+      resizeMode: "cover",
+    },
+    imagePreviewClose: {
+      position: "absolute",
+      top: 4,
+      right: 4,
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: "rgba(0,0,0,0.6)",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    imagePreviewCloseText: {
+      color: "#fff",
+      fontSize: 12,
+      fontWeight: "700",
+    },
+    imageSendButton: {
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      borderRadius: 16,
+      backgroundColor: theme.accent,
+    },
+    imageSendButtonText: {
+      color: "#fff",
+      fontSize: 14,
+      fontWeight: "600",
+    },
+    attachButton: {
+      backgroundColor: theme.accent,
+      borderRadius: 20,
+      width: 40,
+      height: 40,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    attachButtonText: {
+      fontSize: 18,
+    },
+    imageBubble: {
+      borderRadius: 16,
+      overflow: "hidden",
+      maxWidth: 200,
+      maxHeight: 200,
+    },
+    imageBubbleImage: {
+      width: 200,
+      height: 200,
+      resizeMode: "cover",
     },
   });
 }

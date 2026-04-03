@@ -31,6 +31,7 @@ export interface Message {
   content: string;
   displayType: DisplayType;
   metadata?: string | null;
+  reactions?: Record<string, number> | null;
   createdAt: string;
   updatedAt: string;
 }

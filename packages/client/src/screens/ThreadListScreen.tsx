@@ -20,6 +20,7 @@ import {
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { Thread } from "@clawchat/shared";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { RootStackParamList } from "../App";
 import { useTheme } from "../ThemeContext";
 import { useSettings } from "../SettingsContext";
@@ -45,8 +46,42 @@ function ThreadListContent() {
   const [searchQuery, setSearchQuery] = useState("");
   const [creating, setCreating] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [lastReadMessageIds, setLastReadMessageIds] = useState<
+    Record<string, string>
+  >({});
 
   const s = makeStyles(theme);
+
+  const loadLastReadTimestamps = useCallback(async () => {
+    try {
+      const stored = await AsyncStorage.getItem("lastReadTimestamps");
+      if (stored) {
+        setLastReadMessageIds(JSON.parse(stored));
+      }
+    } catch {
+      // Ignore errors
+    }
+  }, []);
+
+  const saveLastReadTimestamp = useCallback(
+    async (threadId: string) => {
+      try {
+        const timestamp = Date.now().toString();
+        const updated = {
+          ...lastReadMessageIds,
+          [threadId]: timestamp,
+        };
+        setLastReadMessageIds(updated);
+        await AsyncStorage.setItem(
+          "lastReadTimestamps",
+          JSON.stringify(updated),
+        );
+      } catch {
+        // Ignore errors
+      }
+    },
+    [lastReadMessageIds],
+  );
 
   const loadThreads = useCallback(async () => {
     setRefreshing(true);
@@ -57,28 +92,11 @@ function ThreadListContent() {
         settings.apiKey,
       );
       const data = (await response.json()) as ThreadWithPreview[];
-      setThreads(data);
->>>>>>> REPPLACCE
-```
-
-Wait, looking at the provided code for `ThreadListScreen.tsx`:
-```typescript
-      const data = (await response.json()) as ThreadWithPreview[];
       data.sort(
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       );
       setThreads(data);
-```
-It is already doing exactly what you requested in point 1. If you meant to *add* it because you thought it was missing, it is already there. If you want me to change how it's sorted, please let me know.
-
-However, I will proceed with the second change in `ThreadDetailScreen.tsx`.
-
-packages/client/src/screens/ThreadDetailScreen.tsx
-```python
-<<<<<<< SEARCH
-              <Markdown style={markdownStyles as any}>{item.content}</Markdown>
-            </Pressable>
     } catch (error) {
       console.error("Failed to load threads", error);
     } finally {
@@ -88,7 +106,8 @@ packages/client/src/screens/ThreadDetailScreen.tsx
 
   useEffect(() => {
     void loadThreads();
-  }, [loadThreads]);
+    void loadLastReadTimestamps();
+  }, [loadThreads, loadLastReadTimestamps]);
 
   const filteredThreads = useMemo(() => {
     if (!searchQuery.trim()) return threads;
@@ -133,6 +152,24 @@ packages/client/src/screens/ThreadDetailScreen.tsx
     setShowCreateModal(true);
   }, []);
 
+  const handleThreadPress = useCallback(
+    (
+      threadId: string,
+      title: string,
+      parentThreadId?: string | undefined,
+      branchedFromMessageId?: string | undefined,
+    ) => {
+      saveLastReadTimestamp(threadId);
+      navigation.navigate("ThreadDetail", {
+        threadId,
+        title,
+        parentThreadId: parentThreadId ?? undefined,
+        branchedFromMessageId: branchedFromMessageId ?? undefined,
+      });
+    },
+    [navigation, saveLastReadTimestamp],
+  );
+
   const handleCreateSubmit = useCallback(
     async (title: string) => {
       setShowCreateModal(false);
@@ -149,6 +186,7 @@ packages/client/src/screens/ThreadDetailScreen.tsx
         );
         const thread = (await res.json()) as ThreadWithPreview;
         setThreads((prev) => [thread, ...prev]);
+        await saveLastReadTimestamp(thread.id);
         navigation.navigate("ThreadDetail", {
           threadId: thread.id,
           title: thread.title,
@@ -161,7 +199,7 @@ packages/client/src/screens/ThreadDetailScreen.tsx
         setCreating(false);
       }
     },
-    [SERVER_URL, navigation, settings.apiKey],
+    [SERVER_URL, navigation, settings.apiKey, saveLastReadTimestamp],
   );
 
   function highlightText(text: string, query: string) {
@@ -242,18 +280,19 @@ packages/client/src/screens/ThreadDetailScreen.tsx
           <SwipeableThreadCard
             item={item}
             onPress={() =>
-              navigation.navigate("ThreadDetail", {
-                threadId: item.id,
-                title: item.title,
-                parentThreadId: item.parentThreadId ?? undefined,
-                branchedFromMessageId: item.branchedFromMessageId ?? undefined,
-              })
+              handleThreadPress(
+                item.id,
+                item.title,
+                item.parentThreadId ?? undefined,
+                item.branchedFromMessageId ?? undefined,
+              )
             }
             onDelete={() => handleDelete(item.id)}
             theme={theme}
             searchQuery={searchQuery}
             highlightText={highlightText}
             formatTime={formatTime}
+            lastReadTimestamp={lastReadMessageIds[item.id]}
           />
         )}
       />
@@ -286,6 +325,7 @@ interface SwipeableCardProps {
   searchQuery: string;
   highlightText: (text: string, query: string) => React.ReactNode;
   formatTime: (date: Date | string) => string;
+  lastReadTimestamp?: string;
 }
 
 function SwipeableThreadCard({
@@ -296,6 +336,7 @@ function SwipeableThreadCard({
   searchQuery,
   highlightText,
   formatTime,
+  lastReadTimestamp,
 }: SwipeableCardProps) {
   const translateX = useRef(new Animated.Value(0)).current;
   const SWIPE_THRESHOLD = -80;
@@ -315,6 +356,12 @@ function SwipeableThreadCard({
       }).start();
     }
   };
+
+  const hasUnread = useMemo(() => {
+    if (!lastReadTimestamp) return false;
+    const threadUpdated = new Date(item.updatedAt).getTime();
+    return threadUpdated > parseInt(lastReadTimestamp, 10);
+  }, [item.updatedAt, lastReadTimestamp]);
 
   return (
     <View style={s.swipeContainer}>
@@ -361,6 +408,8 @@ function SwipeableThreadCard({
                 <View style={s.unreadBadge}>
                   <Text style={s.unreadBadgeText}>{item.unreadCount}</Text>
                 </View>
+              ) : hasUnread ? (
+                <View style={s.unreadDot} />
               ) : null}
             </View>
           </View>
@@ -482,6 +531,12 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       color: "#fff",
       fontSize: 11,
       fontWeight: "700",
+    },
+    unreadDot: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: theme.accent,
     },
     highlight: {
       backgroundColor: theme.accent,
