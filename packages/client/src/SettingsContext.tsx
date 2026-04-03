@@ -17,9 +17,12 @@ interface SettingsContextValue {
   updateSettings: (updates: Partial<Settings>) => Promise<void>;
 }
 
+// Import defaults from config.ts so there's one source of truth
+import { SERVER_URL, API_KEY } from "./config";
+
 const DEFAULT_SETTINGS: Settings = {
-  serverUrl: process.env["EXPO_PUBLIC_SERVER_URL"] ?? "http://localhost:3001",
-  apiKey: process.env["EXPO_PUBLIC_API_KEY"] ?? "",
+  serverUrl: SERVER_URL,
+  apiKey: API_KEY,
 };
 
 const SettingsContext = createContext<SettingsContextValue>({
