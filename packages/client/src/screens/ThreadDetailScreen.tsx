@@ -1542,13 +1542,12 @@ function ThreadDetailContent() {
           <Text style={s.attachButtonText}>📎</Text>
         </Pressable>
         <Pressable
-          onPressIn={() => !isRecording && startRecording()}
-          onPressOut={() => isRecording && stopRecording()}
+          onPress={sendMessage}
           style={[
             s.sendButton,
-            { backgroundColor: isRecording ? theme.error : theme.accent },
+            { backgroundColor: input.trim() ? theme.accent : (theme.primary || '#333') },
           ]}
-          disabled={isRecording}
+          disabled={!input.trim() || isRecording}
         >
           <Text style={s.sendButtonText}>↑</Text>
         </Pressable>
