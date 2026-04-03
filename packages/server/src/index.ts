@@ -1,8 +1,10 @@
+import crypto from 'crypto';
 import http from 'http';
 import express from 'express';
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { WebSocketServer, WebSocket } from 'ws';
+import rateLimit from 'express-rate-limit';
 import type { PersistedMemoryChip, Thread, WsClientEvent, WsServerEvent } from '@clawchat/shared';
 import { MemoryService } from './memory';
 
@@ -13,7 +15,11 @@ const memory = new MemoryService();
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
+
+/** Map<WebSocket, threadId> */
 const subscriptions = new Map<WebSocket, string>();
+/** Track liveness for heartbeat */
+const clientAlive = new Map<WebSocket, boolean>();
 
 app.use(express.json());
 
@@ -26,19 +32,41 @@ app.use((req, res, next) => {
   next();
 });
 
+// ─── Rate limiting (100 req/min per IP) ──────────────────────────────────────
+app.use(rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) => {
+    res.status(429).json({ error: 'Too many requests', code: 'RATE_LIMITED' });
+  },
+}));
+
 // ─── Auth middleware ──────────────────────────────────────────────────────────
 const REQUIRED_API_KEY = process.env.CLAWCHAT_API_KEY ?? '';
 
 app.use((req, res, next) => {
+  // Dev mode: no key configured
   if (!REQUIRED_API_KEY) { next(); return; }
+  // Skip auth for health endpoint
+  if (req.path === '/health') { next(); return; }
+
   const auth = req.headers.authorization ?? '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   if (token !== REQUIRED_API_KEY) {
-    res.status(401).json({ error: 'Unauthorized' });
+    res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
     return;
   }
   next();
 });
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function logError(context: string, error: unknown): void {
+  const ts = new Date().toISOString();
+  console.error(`[${ts}] [${context}]`, error);
+}
 
 const broadcastToThread = (threadId: string, payload: WsServerEvent) => {
   const serialized = JSON.stringify(payload);
@@ -53,7 +81,7 @@ const broadcastToThread = (threadId: string, payload: WsServerEvent) => {
  * Parse a SYSTEM message and emit a typed WS event if it matches a known prefix.
  */
 function emitTypedEventFromSystemMessage(threadId: string, content: string): void {
-  const runId = 'system';
+  const runId = crypto.randomUUID();
 
   if (content.startsWith('agent_started:')) {
     const agentName = content.replace('agent_started:', '').trim().split(' ')[0] ?? 'Agent';
@@ -96,7 +124,7 @@ function emitTypedEventFromSystemMessage(threadId: string, content: string): voi
 
     prisma.costEntry.create({
       data: { threadId, agentId: agentName, tokens, costUsd: cost },
-    }).catch((err) => console.error('[cost] persist failed:', err));
+    }).catch((err) => logError('cost.persist', err));
 
     broadcastToThread(threadId, { type: 'cost_incurred', threadId, cost, tokens, agentName });
   }
@@ -116,9 +144,8 @@ async function handleRememberCommand(
     data: { threadId, text, metadata: JSON.stringify({ sourceMessageId: messageId }) },
   });
 
-  // Also store in mem0 vector DB
   memory.addMemory(text, 'robin', { threadId, messageId, type: 'explicit' }).catch((err) => {
-    console.error('[memory] addMemory failed for /remember:', err);
+    logError('memory.addMemory./remember', err);
   });
 
   broadcastToThread(threadId, {
@@ -195,24 +222,21 @@ app.post('/threads/:id/branch', async (req, res, next) => {
       : null;
 
     if (!messageId) {
-      res.status(400).json({ error: 'messageId is required' });
+      res.status(400).json({ error: 'messageId is required', code: 'MISSING_MESSAGE_ID' });
       return;
     }
 
-    // Verify the message belongs to this thread
     const sourceMessage = await prisma.message.findFirst({
       where: { id: messageId, threadId: parentThreadId },
     });
     if (!sourceMessage) {
-      res.status(404).json({ error: 'Message not found in this thread' });
+      res.status(404).json({ error: 'Message not found in this thread', code: 'NOT_FOUND' });
       return;
     }
 
     const parentThread = await prisma.thread.findUnique({ where: { id: parentThreadId } });
-
     const childTitle = titleOverride ?? `Branch: ${(parentThread?.title ?? 'Thread').slice(0, 40)}`;
 
-    // Create the child thread
     const childThread = await prisma.thread.create({
       data: {
         title: childTitle,
@@ -221,7 +245,6 @@ app.post('/threads/:id/branch', async (req, res, next) => {
       },
     });
 
-    // Broadcast to anyone subscribed to the parent thread
     broadcastToThread(parentThreadId, {
       type: 'thread.branch',
       parentThreadId,
@@ -237,13 +260,40 @@ app.post('/threads/:id/branch', async (req, res, next) => {
 
 // ─── Messages ────────────────────────────────────────────────────────────────
 
+/**
+ * GET /threads/:id/messages
+ * Query params: ?cursor=<messageId>&limit=50
+ * Returns: { messages: [...], nextCursor: string | null }
+ * Order: createdAt DESC (newest first)
+ */
 app.get('/threads/:id/messages', async (req, res, next) => {
   try {
+    const threadId = req.params.id;
+    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+    const limitRaw = parseInt(String(req.query.limit ?? '50'), 10);
+    const limit = Number.isNaN(limitRaw) || limitRaw < 1 ? 50 : Math.min(limitRaw, 200);
+
+    // Fetch limit+1 to determine if there's a next page
     const messages = await prisma.message.findMany({
-      where: { threadId: req.params.id },
-      orderBy: { createdAt: 'asc' },
+      where: {
+        threadId,
+        ...(cursor
+          ? {
+              createdAt: {
+                lt: (await prisma.message.findUnique({ where: { id: cursor } }))?.createdAt,
+              },
+            }
+          : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit + 1,
     });
-    res.json(messages);
+
+    const hasMore = messages.length > limit;
+    const page = hasMore ? messages.slice(0, limit) : messages;
+    const nextCursor = hasMore ? (page[page.length - 1]?.id ?? null) : null;
+
+    res.json({ messages: page, nextCursor });
   } catch (error) {
     next(error);
   }
@@ -258,7 +308,7 @@ app.post('/threads/:id/messages', async (req, res, next) => {
     const metadata = req.body?.metadata ? JSON.stringify(req.body.metadata) : null;
 
     if (!content) {
-      res.status(400).json({ error: 'content is required' });
+      res.status(400).json({ error: 'content is required', code: 'MISSING_CONTENT' });
       return;
     }
 
@@ -274,16 +324,14 @@ app.post('/threads/:id/messages', async (req, res, next) => {
       emitTypedEventFromSystemMessage(threadId, content);
     }
 
-    // Handle /remember command
     if (/^\/remember\s+/i.test(content)) {
       handleRememberCommand(threadId, message.id, content).catch((err) => {
-        console.error('[remember] failed:', err);
+        logError('remember', err);
       });
     }
 
-    // Fire-and-forget: store message in mem0
     memory.addMemory(content, 'robin', { threadId, role, messageId: message.id }).catch((err) => {
-      console.error('[memory] addMemory failed:', err);
+      logError('memory.addMemory', err);
     });
 
     res.status(201).json(message);
@@ -293,6 +341,44 @@ app.post('/threads/:id/messages', async (req, res, next) => {
 });
 
 // ─── Cost endpoints ──────────────────────────────────────────────────────────
+
+/**
+ * GET /threads/:id/cost/summary
+ * Returns { totalTokens, totalCostUsd, byAgent: [{ agentId, totalTokens, totalCostUsd }] }
+ */
+app.get('/threads/:id/cost/summary', async (req, res, next) => {
+  try {
+    const threadId = req.params.id;
+    const entries = await prisma.costEntry.findMany({
+      where: { threadId },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const totalTokens = entries.reduce((sum, e) => sum + e.tokens, 0);
+    const totalCostUsd = entries.reduce((sum, e) => sum + e.costUsd, 0);
+
+    // Group by agentId
+    const agentMap = new Map<string, { totalTokens: number; totalCostUsd: number }>();
+    for (const e of entries) {
+      const key = e.agentId ?? '__unknown__';
+      const cur = agentMap.get(key) ?? { totalTokens: 0, totalCostUsd: 0 };
+      agentMap.set(key, {
+        totalTokens: cur.totalTokens + e.tokens,
+        totalCostUsd: cur.totalCostUsd + e.costUsd,
+      });
+    }
+
+    const byAgent = Array.from(agentMap.entries()).map(([agentId, stats]) => ({
+      agentId: agentId === '__unknown__' ? null : agentId,
+      totalTokens: stats.totalTokens,
+      totalCostUsd: stats.totalCostUsd,
+    }));
+
+    res.json({ totalTokens, totalCostUsd, byAgent });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get('/threads/:id/cost', async (req, res, next) => {
   try {
@@ -355,7 +441,7 @@ app.post('/threads/:id/memories', async (req, res, next) => {
     const threadId = req.params.id;
     const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
     if (!text) {
-      res.status(400).json({ error: 'text is required' });
+      res.status(400).json({ error: 'text is required', code: 'MISSING_TEXT' });
       return;
     }
     const metadata = req.body?.metadata ? JSON.stringify(req.body.metadata) : null;
@@ -364,9 +450,8 @@ app.post('/threads/:id/memories', async (req, res, next) => {
       data: { threadId, text, metadata },
     });
 
-    // Also push to mem0
     memory.addMemory(text, 'robin', { threadId, type: 'explicit' }).catch((err) => {
-      console.error('[memory] addMemory for chip failed:', err);
+      logError('memory.addMemory.chip', err);
     });
 
     broadcastToThread(threadId, { type: 'memory_chip.saved', threadId, chip: chipToDto(chip) });
@@ -411,15 +496,49 @@ app.delete('/threads/:id/memories/:chipId', async (req, res, next) => {
 // ─── Error handler ───────────────────────────────────────────────────────────
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(error);
-  res.status(500).json({ error: 'Internal server error' });
+  const ts = new Date().toISOString();
+  console.error(`[${ts}] [unhandled]`, error);
+  const message = error instanceof Error ? error.message : 'Internal server error';
+  res.status(500).json({ error: message, code: 'INTERNAL_ERROR' });
 });
+
+// ─── WebSocket upgrade ───────────────────────────────────────────────────────
 
 server.on('upgrade', (request, socket, head) => {
   wss.handleUpgrade(request, socket, head, (ws) => {
     wss.emit('connection', ws, request);
   });
 });
+
+// ─── WebSocket heartbeat (30s ping/pong) ─────────────────────────────────────
+
+const HEARTBEAT_INTERVAL_MS = 30_000;
+
+const heartbeatTimer = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!clientAlive.get(ws)) {
+      // No pong received since last ping — terminate stale client
+      const threadId = subscriptions.get(ws);
+      subscriptions.delete(ws);
+      clientAlive.delete(ws);
+      ws.terminate();
+      if (threadId) {
+        emitGhostMessage(threadId, 'agent_disconnected').catch((err) =>
+          logError('ghost.stale_disconnect', err),
+        );
+      }
+      continue;
+    }
+    clientAlive.set(ws, false);
+    ws.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+
+wss.on('close', () => {
+  clearInterval(heartbeatTimer);
+});
+
+// ─── WebSocket helpers ────────────────────────────────────────────────────────
 
 async function emitGhostMessage(threadId: string, content: string): Promise<void> {
   const message = await prisma.message.create({
@@ -445,14 +564,12 @@ async function handleIncomingMessage(ws: WebSocket, threadId: string, content: s
     payload: { message },
   } as unknown as WsServerEvent);
 
-  // Handle /remember command
   if (/^\/remember\s+/i.test(content)) {
     handleRememberCommand(threadId, message.id, content).catch((err) => {
-      console.error('[remember] failed:', err);
+      logError('remember.ws', err);
     });
   }
 
-  // Retrieve relevant memories and emit chips
   const chips = await memory.getRelevant(threadId, content);
   for (const chip of chips) {
     broadcastToThread(threadId, {
@@ -467,14 +584,22 @@ async function handleIncomingMessage(ws: WebSocket, threadId: string, content: s
     });
   }
 
-  // Store message in mem0 (fire-and-forget)
   memory.store(content, 'default', { threadId, role: 'USER', messageId: message.id }).catch((err) => {
-    console.error('[memory] store failed:', err);
+    logError('memory.store', err);
   });
 }
 
+// ─── WebSocket connection handler ─────────────────────────────────────────────
+
 wss.on('connection', (ws) => {
   let subscribed = false;
+
+  // Mark client as alive initially
+  clientAlive.set(ws, true);
+
+  ws.on('pong', () => {
+    clientAlive.set(ws, true);
+  });
 
   ws.on('message', async (raw) => {
     try {
@@ -491,7 +616,7 @@ wss.on('connection', (ws) => {
         subscribed = true;
         ws.send(JSON.stringify({ type: 'subscribed', threadId: event.threadId } satisfies WsServerEvent));
         emitGhostMessage(event.threadId, 'agent_connected').catch((err) =>
-          console.error('[ghost] connect failed:', err),
+          logError('ghost.connect', err),
         );
         return;
       }
@@ -511,7 +636,7 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'subscribed', threadId: event.threadId } satisfies WsServerEvent));
       }
     } catch (error) {
-      console.error('WebSocket error', error);
+      logError('ws.message', error);
       ws.send(JSON.stringify({ type: 'error', error: 'Invalid websocket payload' } satisfies WsServerEvent));
     }
   });
@@ -519,16 +644,20 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     const threadId = subscriptions.get(ws);
     subscriptions.delete(ws);
+    clientAlive.delete(ws);
     if (threadId) {
       emitGhostMessage(threadId, 'agent_disconnected').catch((err) =>
-        console.error('[ghost] disconnect failed:', err),
+        logError('ghost.disconnect', err),
       );
     }
   });
 });
 
+// ─── Start ────────────────────────────────────────────────────────────────────
+
 const PORT = Number(process.env.SERVER_PORT ?? 3001);
 
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] Server running on port ${PORT}`);
 });

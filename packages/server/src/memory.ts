@@ -115,10 +115,44 @@ export class MemoryService {
     return this.store(content, userId, metadata);
   }
 
-  async getRelevant(_threadId: string, lastMessage: string): Promise<MemoryResult[]> {
+  async getRelevant(threadId: string, lastMessage: string): Promise<MemoryResult[]> {
     try {
-      const results = await this.searchMemories(lastMessage, '');
-      return results.filter((r) => r.score > 0.7);
+      const vector = await this.embed(lastMessage);
+
+      const body: Record<string, unknown> = {
+        vector,
+        limit: 10,
+        with_payload: true,
+        filter: {
+          must: [
+            { key: 'threadId', match: { value: threadId } },
+          ],
+        },
+      };
+
+      const res = await fetch(
+        `${this.qdrantUrl}/collections/${this.collection}/points/search`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      );
+
+      if (!res.ok) {
+        throw new Error(`Qdrant search failed: ${res.status} ${await res.text()}`);
+      }
+
+      const data = (await res.json()) as QdrantSearchResponse;
+      return data.result
+        .map((hit) => ({
+          id: String(hit.id),
+          content: hit.payload?.content ?? '',
+          score: hit.score,
+          category: hit.payload?.category,
+          userId: hit.payload?.userId,
+        }))
+        .filter((r) => r.score > 0.7);
     } catch (error) {
       console.error('[memory] getRelevant failed:', error);
       return [];
