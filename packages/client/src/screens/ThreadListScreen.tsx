@@ -35,6 +35,17 @@ interface ThreadWithPreview extends Thread {
   unreadCount?: number;
 }
 
+interface SearchMessageResult {
+  message: {
+    id: string;
+    threadId: string;
+    content: string;
+    role: string;
+    createdAt: string;
+  };
+  threadTitle: string;
+}
+
 function ThreadListContent() {
   const navigation = useNavigation<Navigation>();
   const { theme } = useTheme();
@@ -49,6 +60,10 @@ function ThreadListContent() {
   const [lastReadMessageIds, setLastReadMessageIds] = useState<
     Record<string, string>
   >({});
+  const [searchResults, setSearchResults] = useState<SearchMessageResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const s = makeStyles(theme);
 
@@ -108,6 +123,40 @@ function ThreadListContent() {
     void loadThreads();
     void loadLastReadTimestamps();
   }, [loadThreads, loadLastReadTimestamps]);
+
+  const handleSearchQueryChange = useCallback(
+    (value: string) => {
+      setSearchQuery(value);
+
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+
+      searchTimeoutRef.current = setTimeout(async () => {
+        if (!value.trim()) {
+          setSearchResults([]);
+          return;
+        }
+
+        setIsSearching(true);
+        try {
+          const response = await fetchWithAuth(
+            `${SERVER_URL}/search?q=${encodeURIComponent(value)}`,
+            {},
+            settings.apiKey,
+          );
+          const results = (await response.json()) as SearchMessageResult[];
+          setSearchResults(results);
+        } catch (error) {
+          console.error("Search failed", error);
+          setSearchResults([]);
+        } finally {
+          setIsSearching(false);
+        }
+      }, 300);
+    },
+    [searchQuery, SERVER_URL, settings.apiKey],
+  );
 
   const filteredThreads = useMemo(() => {
     if (!searchQuery.trim()) return threads;
@@ -226,6 +275,32 @@ function ThreadListContent() {
     return d.toLocaleDateString([], { month: "short", day: "numeric" });
   }
 
+  const groupedSearchResults = useMemo(() => {
+    if (searchResults.length === 0) return {};
+    const grouped: Record<
+      string,
+      {
+        threadId: string;
+        threadTitle: string;
+        messages: SearchMessageResult[];
+      }
+    > = {};
+    for (const result of searchResults) {
+      const threadId = result.message.threadId;
+      if (!grouped[threadId]) {
+        grouped[threadId] = {
+          threadId,
+          threadTitle: result.threadTitle,
+          messages: [],
+        };
+      }
+      grouped[threadId].messages.push(result);
+    }
+    return grouped;
+  }, [searchResults]);
+
+  const displayData = searchQuery.trim() ? searchResults : filteredThreads;
+
   return (
     <View style={s.container}>
       {/* Search Bar */}
@@ -234,68 +309,102 @@ function ThreadListContent() {
         <TextInput
           style={s.searchInput}
           value={searchQuery}
-          onChangeText={setSearchQuery}
-          placeholder="Search threads…"
+          onChangeText={handleSearchQueryChange}
+          placeholder="Search messages…"
           placeholderTextColor={theme.textFaint}
           clearButtonMode="while-editing"
         />
       </View>
 
-      <FlatList
-        data={filteredThreads}
-        keyExtractor={(item) => item.id}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={loadThreads}
-            tintColor={theme.accent}
-          />
-        }
-        ListEmptyComponent={
-          <View style={s.emptyState}>
-            <Text style={s.emptyEmoji}>🚀</Text>
-            <Text style={s.emptyTitle}>
-              {searchQuery
-                ? "No threads match your search"
-                : "Welcome to ClawChat!"}
-            </Text>
-            {!searchQuery && (
-              <>
-                <Text style={s.emptySubtitle}>
-                  Start a conversation with an AI agent to get help with coding,
-                  analysis, and more.
-                </Text>
-                <Pressable
-                  style={s.emptyButton}
-                  onPress={handleCreate}
-                  disabled={creating}
-                >
-                  <Text style={s.emptyButtonText}>Start a conversation</Text>
-                </Pressable>
-              </>
-            )}
-          </View>
-        }
-        renderItem={({ item }) => (
-          <SwipeableThreadCard
-            item={item}
-            onPress={() =>
-              handleThreadPress(
-                item.id,
-                item.title,
-                item.parentThreadId ?? undefined,
-                item.branchedFromMessageId ?? undefined,
-              )
-            }
-            onDelete={() => handleDelete(item.id)}
-            theme={theme}
-            searchQuery={searchQuery}
-            highlightText={highlightText}
-            formatTime={formatTime}
-            lastReadTimestamp={lastReadMessageIds[item.id]}
-          />
-        )}
-      />
+      {searchQuery.trim() ? (
+        <FlatList
+          data={Object.values(groupedSearchResults)}
+          keyExtractor={(item) => (item as any).threadId}
+          ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+          ListEmptyComponent={
+            isSearching ? (
+              <View style={s.emptyState}>
+                <Text style={s.emptyTitle}>Searching…</Text>
+              </View>
+            ) : (
+              <View style={s.emptyState}>
+                <Text style={s.emptyEmoji}>🔍</Text>
+                <Text style={s.emptyTitle}>No messages found</Text>
+                <Text style={s.emptySubtitle}>Try a different search term</Text>
+              </View>
+            )
+          }
+          renderItem={({ item }) => (
+            <SearchResultGroup
+              threadId={(item as any).threadId}
+              threadTitle={(item as any).threadTitle}
+              messages={(item as any).messages}
+              theme={theme}
+              searchQuery={searchQuery}
+              formatTime={formatTime}
+              onNavigate={(threadId, title) =>
+                handleThreadPress(threadId, title, undefined, undefined)
+              }
+            />
+          )}
+        />
+      ) : (
+        <FlatList
+          data={filteredThreads}
+          keyExtractor={(item) => item.id}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={loadThreads}
+              tintColor={theme.accent}
+            />
+          }
+          ListEmptyComponent={
+            <View style={s.emptyState}>
+              <Text style={s.emptyEmoji}>🚀</Text>
+              <Text style={s.emptyTitle}>
+                {searchQuery
+                  ? "No threads match your search"
+                  : "Welcome to ClawChat!"}
+              </Text>
+              {!searchQuery && (
+                <>
+                  <Text style={s.emptySubtitle}>
+                    Start a conversation with an AI agent to get help with
+                    coding, analysis, and more.
+                  </Text>
+                  <Pressable
+                    style={s.emptyButton}
+                    onPress={handleCreate}
+                    disabled={creating}
+                  >
+                    <Text style={s.emptyButtonText}>Start a conversation</Text>
+                  </Pressable>
+                </>
+              )}
+            </View>
+          }
+          renderItem={({ item }) => (
+            <SwipeableThreadCard
+              item={item}
+              onPress={() =>
+                handleThreadPress(
+                  item.id,
+                  item.title,
+                  item.parentThreadId ?? undefined,
+                  item.branchedFromMessageId ?? undefined,
+                )
+              }
+              onDelete={() => handleDelete(item.id)}
+              theme={theme}
+              searchQuery={searchQuery}
+              highlightText={highlightText}
+              formatTime={formatTime}
+              lastReadTimestamp={lastReadMessageIds[item.id]}
+            />
+          )}
+        />
+      )}
 
       {/* FAB — New Thread */}
       <Pressable
@@ -313,6 +422,71 @@ function ThreadListContent() {
         onSubmit={handleCreateSubmit}
         onDismiss={() => setShowCreateModal(false)}
       />
+    </View>
+  );
+}
+
+interface SearchResultGroupProps {
+  threadId: string;
+  threadTitle: string;
+  messages: SearchMessageResult[];
+  theme: ReturnType<typeof useTheme>["theme"];
+  searchQuery: string;
+  formatTime: (date: Date | string) => string;
+  onNavigate: (threadId: string, title: string) => void;
+}
+
+function SearchResultGroup({
+  threadId,
+  threadTitle,
+  messages,
+  theme,
+  searchQuery,
+  formatTime,
+  onNavigate,
+}: SearchResultGroupProps) {
+  const s = makeStyles(theme);
+
+  function highlightText(text: string, query: string) {
+    if (!query.trim()) return <Text style={s.messageContent}>{text}</Text>;
+    const idx = text.toLowerCase().indexOf(query.toLowerCase());
+    if (idx === -1) return <Text style={s.messageContent}>{text}</Text>;
+    return (
+      <Text style={s.messageContent}>
+        {text.slice(0, idx)}
+        <Text style={s.highlight}>{text.slice(idx, idx + query.length)}</Text>
+        {text.slice(idx + query.length)}
+      </Text>
+    );
+  }
+
+  return (
+    <View style={s.searchResultGroup}>
+      <Pressable
+        onPress={() => onNavigate(threadId, threadTitle)}
+        style={s.searchResultHeader}
+      >
+        <Text style={s.searchResultTitle}>{threadTitle}</Text>
+        <Text style={s.searchResultMeta}>
+          {messages.length} result{messages.length !== 1 ? "s" : ""}
+        </Text>
+      </Pressable>
+
+      <View style={s.searchResultMessages}>
+        {messages.map((msg) => (
+          <View key={msg.message.id} style={s.messageRow}>
+            <View style={s.messageContentContainer}>
+              <Text style={s.messageRole}>
+                {msg.message.role === "USER" ? "You" : msg.message.role}
+              </Text>
+              {highlightText(msg.message.content, searchQuery)}
+            </View>
+            <Text style={s.messageTime}>
+              {formatTime(msg.message.createdAt)}
+            </Text>
+          </View>
+        ))}
+      </View>
     </View>
   );
 }
@@ -604,6 +778,60 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       fontSize: 28,
       lineHeight: 32,
       fontWeight: "300",
+    },
+    searchResultGroup: {
+      backgroundColor: theme.surface,
+      borderRadius: 12,
+      marginHorizontal: 12,
+      marginBottom: 8,
+      padding: 12,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    searchResultHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 8,
+    },
+    searchResultTitle: {
+      fontSize: 14,
+      fontWeight: "600",
+      color: theme.text,
+    },
+    searchResultMeta: {
+      fontSize: 12,
+      color: theme.textFaint,
+    },
+    searchResultMessages: {
+      marginTop: 4,
+    },
+    messageRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "flex-start",
+      paddingVertical: 4,
+    },
+    messageContentContainer: {
+      flex: 1,
+      marginRight: 8,
+    },
+    messageRole: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: theme.accent,
+      marginBottom: 2,
+      textTransform: "uppercase",
+    },
+    messageContent: {
+      fontSize: 13,
+      color: theme.textMuted,
+      lineHeight: 18,
+    },
+    messageTime: {
+      fontSize: 10,
+      color: theme.textFaint,
+      flexShrink: 0,
     },
   });
 }

@@ -270,6 +270,79 @@ app.get("/memories", async (req, res, next) => {
   }
 });
 
+// ─── Global message search ───────────────────────────────────────────────────
+
+interface SearchResult {
+  message: {
+    id: string;
+    threadId: string;
+    content: string;
+    role: string;
+    createdAt: string;
+  };
+  threadTitle: string;
+}
+
+app.get("/search", async (req, res, next) => {
+  try {
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const threadId =
+      typeof req.query.threadId === "string" ? req.query.threadId : undefined;
+
+    if (!q) {
+      res.json([]);
+      return;
+    }
+
+    const searchWhere: Record<string, unknown> = {
+      content: {
+        contains: q,
+        mode: "insensitive",
+      },
+    };
+
+    if (threadId) {
+      searchWhere.threadId = threadId;
+    }
+
+    const messages = await prisma.message.findMany({
+      where: searchWhere,
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: {
+        id: true,
+        threadId: true,
+        content: true,
+        role: true,
+        createdAt: true,
+      },
+    });
+
+    const threadTitlesMap = new Map<string, string>();
+    const threadIds = Array.from(new Set(messages.map((m) => m.threadId)));
+    const threads = await prisma.thread.findMany({
+      where: { id: { in: threadIds } },
+      select: { id: true, title: true },
+    });
+    threads.forEach((t) => threadTitlesMap.set(t.id, t.title));
+
+    const results: SearchResult[] = messages.map((message) => ({
+      message: {
+        id: message.id,
+        threadId: message.threadId,
+        content: message.content,
+        role: message.role,
+        createdAt: message.createdAt.toISOString(),
+      },
+      threadTitle: threadTitlesMap.get(message.threadId) ?? "Unknown",
+    }));
+
+    res.json(results);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ─── Threads ──────────────────────────────────────────────────────────────────
 
 app.get("/threads", async (_req, res, next) => {
