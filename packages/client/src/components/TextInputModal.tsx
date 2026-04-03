@@ -1,12 +1,12 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useRef, useState, useEffect } from "react";
 import {
   Keyboard,
-  Modal,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
+  Platform,
 } from "react-native";
 import { useTheme } from "../ThemeContext";
 
@@ -36,178 +36,114 @@ export default function TextInputModal({
   const { theme } = useTheme();
   const [value, setValue] = useState(defaultValue);
   const inputRef = useRef<TextInput>(null);
-  const s = makeStyles(theme);
 
-  const handleDismiss = useCallback(() => {
-    onDismiss?.();
-    setValue(defaultValue);
-  }, [defaultValue, onDismiss]);
+  useEffect(() => {
+    if (visible) {
+      setValue(defaultValue);
+      setTimeout(() => inputRef.current?.focus(), 200);
+    }
+  }, [visible, defaultValue]);
 
   const handleSubmit = useCallback(() => {
     if (value.trim()) {
       onSubmit(value.trim());
+      setValue("");
     }
-    Keyboard.dismiss();
-    handleDismiss();
-  }, [value, onSubmit, handleDismiss]);
+  }, [value, onSubmit]);
 
   const handleCancel = useCallback(() => {
-    Keyboard.dismiss();
+    setValue(defaultValue);
     onCancel?.();
-    handleDismiss();
-  }, [onCancel, handleDismiss]);
-
-  React.useEffect(() => {
-    if (visible) {
-      setValue(defaultValue);
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 100);
-    }
-  }, [visible, defaultValue]);
+    onDismiss?.();
+  }, [defaultValue, onCancel, onDismiss]);
 
   if (!visible) return null;
 
   return (
-    <Modal
-      visible={visible}
-      animationType="fade"
-      transparent
-      onRequestClose={handleCancel}
-    >
-      <View style={s.overlay}>
-        <Pressable
-          style={s.overlayDismiss}
-          onPress={handleCancel}
+    <View style={[styles.overlay, { backgroundColor: "rgba(0,0,0,0.6)" }]}>
+      <Pressable style={styles.backdrop} onPress={handleCancel} />
+      <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+        <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
+        <TextInput
+          ref={inputRef}
+          style={[styles.input, { 
+            backgroundColor: theme.inputBg || theme.background, 
+            color: theme.text,
+            borderColor: theme.border,
+          }]}
+          value={value}
+          onChangeText={setValue}
+          placeholder={placeholder}
+          placeholderTextColor={theme.textFaint || "#666"}
+          maxLength={maxLength}
+          returnKeyType="done"
+          onSubmitEditing={handleSubmit}
         />
-        <View style={s.modalContent}>
-          <Text style={s.modalTitle}>{title}</Text>
-
-          <TextInput
-            ref={inputRef}
-            style={s.input}
-            value={value}
-            onChangeText={setValue}
-            placeholder={placeholder}
-            placeholderTextColor={theme.textFaint}
-            maxLength={maxLength}
-            autoFocus
-            blurOnSubmit
-            returnKeyType="done"
-            onSubmitEditing={handleSubmit}
-            selectTextOnFocus
-          />
-
-          <View style={s.buttonRow}>
-            <Pressable
-              style={[s.button, s.cancelButton]}
-              onPress={handleCancel}
-            >
-              <Text style={[s.buttonText, s.cancelButtonText]}>Cancel</Text>
-            </Pressable>
-
-            <Pressable
-              style={[
-                s.button,
-                s.confirmButton,
-                !value.trim() && s.buttonDisabled,
-              ]}
-              onPress={handleSubmit}
-              disabled={!value.trim()}
-            >
-              <Text
-                style={[
-                  s.buttonText,
-                  s.confirmButtonText,
-                  !value.trim() && s.buttonTextDisabled,
-                ]}
-              >
-                {confirmText}
-              </Text>
-            </Pressable>
-          </View>
+        <View style={styles.buttons}>
+          <Pressable style={[styles.btn, { backgroundColor: theme.primary || "#333" }]} onPress={handleCancel}>
+            <Text style={[styles.btnText, { color: theme.text }]}>Cancel</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.btn, { backgroundColor: theme.accent || "#e94560", opacity: value.trim() ? 1 : 0.4 }]}
+            onPress={handleSubmit}
+            disabled={!value.trim()}
+          >
+            <Text style={[styles.btnText, { color: "#fff" }]}>{confirmText}</Text>
+          </Pressable>
         </View>
       </View>
-    </Modal>
+    </View>
   );
 }
 
-function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
-  return StyleSheet.create({
-    overlay: {
-      flex: 1,
-      backgroundColor: "rgba(0, 0, 0, 0.5)",
-      justifyContent: "center",
-      alignItems: "center",
-      padding: 20,
-    },
-    overlayDismiss: {
-      position: "absolute" as const,
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-    },
-    modalContent: {
-      width: "100%",
-      maxWidth: 320,
-      backgroundColor: theme.surface,
-      borderRadius: 16,
-      padding: 20,
-      borderWidth: 1,
-      borderColor: theme.border,
-    },
-    modalTitle: {
-      fontSize: 18,
-      fontWeight: "600",
-      color: theme.text,
-      textAlign: "center",
-      marginBottom: 16,
-    },
-    input: {
-      width: "100%",
-      backgroundColor: theme.inputBg,
-      borderWidth: 1,
-      borderColor: theme.inputBorder,
-      borderRadius: 12,
-      paddingHorizontal: 16,
-      paddingVertical: 14,
-      fontSize: 16,
-      color: theme.text,
-      marginBottom: 20,
-      minHeight: 50,
-    },
-    buttonRow: {
-      flexDirection: "row",
-      gap: 12,
-    },
-    button: {
-      flex: 1,
-      paddingVertical: 14,
-      borderRadius: 12,
-      alignItems: "center",
-    },
-    cancelButton: {
-      backgroundColor: theme.primary,
-    },
-    confirmButton: {
-      backgroundColor: theme.accent,
-    },
-    buttonDisabled: {
-      opacity: 0.5,
-    },
-    buttonText: {
-      fontSize: 16,
-      fontWeight: "600",
-    },
-    cancelButtonText: {
-      color: theme.text,
-    },
-    confirmButtonText: {
-      color: "#fff",
-    },
-    buttonTextDisabled: {
-      opacity: 0.5,
-    },
-  });
-}
+const styles = StyleSheet.create({
+  overlay: {
+    position: "absolute" as any,
+    top: 0, left: 0, right: 0, bottom: 0,
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 9999,
+    ...(Platform.OS === "web" ? { position: "fixed" as any } : {}),
+  },
+  backdrop: {
+    position: "absolute" as any,
+    top: 0, left: 0, right: 0, bottom: 0,
+  },
+  card: {
+    width: "85%",
+    maxWidth: 320,
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    zIndex: 10000,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: "600",
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    marginBottom: 20,
+    minHeight: 48,
+  },
+  buttons: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  btn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  btnText: {
+    fontSize: 16,
+    fontWeight: "600",
+  },
+});
