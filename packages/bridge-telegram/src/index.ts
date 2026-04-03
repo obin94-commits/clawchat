@@ -20,11 +20,11 @@ if (!TELEGRAM_CHAT_ID) {
   process.exit(1);
 }
 
-const CLAWCHAT_WS_URL =
-  CLAWCHAT_SERVER_URL.replace("http://", "ws://").replace(
-    "https://",
-    "wss://",
-  ) + "/ws";
+// WS URL must NOT append /ws — the server handles upgrades at root
+const CLAWCHAT_WS_URL = CLAWCHAT_SERVER_URL.replace("http://", "ws://").replace(
+  "https://",
+  "wss://",
+);
 
 // ─── ClawChat REST API helpers ───────────────────────────────────────────────
 
@@ -98,10 +98,23 @@ bot.on("polling_error", (err) => {
 let ws: WebSocket | null = null;
 let threadId: string | null = null;
 let wsConnected = false;
+let wsReconnectAttempts = 0;
+let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Exponential backoff: 1s, 2s, 4s, 8s, capped at 30s */
+function wsBackoffMs(attempt: number): number {
+  return Math.min(1000 * Math.pow(2, attempt), 30_000);
+}
 
 function connectWebSocket(): void {
   if (!threadId) return;
-  const url = `${CLAWCHAT_WS_URL}?threadId=${encodeURIComponent(threadId)}`;
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
+
+  // Connect to root WebSocket — no /ws suffix
+  const url = CLAWCHAT_WS_URL;
   const socket = new WebSocket(url, {
     headers: CLAWCHAT_API_KEY
       ? { Authorization: `Bearer ${CLAWCHAT_API_KEY}` }
@@ -112,6 +125,7 @@ function connectWebSocket(): void {
   socket.on("open", () => {
     console.log("[telegram-bridge] WebSocket connected");
     wsConnected = true;
+    wsReconnectAttempts = 0; // reset on successful connect
     socket.send(
       JSON.stringify({
         type: "subscribe",
@@ -134,10 +148,14 @@ function connectWebSocket(): void {
   });
 
   socket.on("close", () => {
-    console.log("[telegram-bridge] WebSocket closed, reconnecting...");
     wsConnected = false;
     ws = null;
-    setTimeout(connectWebSocket, 3000);
+    const delay = wsBackoffMs(wsReconnectAttempts);
+    wsReconnectAttempts++;
+    console.log(
+      `[telegram-bridge] WebSocket closed — reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${wsReconnectAttempts})`,
+    );
+    wsReconnectTimer = setTimeout(connectWebSocket, delay);
   });
 }
 
