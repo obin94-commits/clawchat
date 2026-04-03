@@ -57,11 +57,28 @@ function ThreadListContent() {
         settings.apiKey,
       );
       const data = (await response.json()) as ThreadWithPreview[];
+      setThreads(data);
+>>>>>>> REPPLACCE
+```
+
+Wait, looking at the provided code for `ThreadListScreen.tsx`:
+```typescript
+      const data = (await response.json()) as ThreadWithPreview[];
       data.sort(
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       );
       setThreads(data);
+```
+It is already doing exactly what you requested in point 1. If you meant to *add* it because you thought it was missing, it is already there. If you want me to change how it's sorted, please let me know.
+
+However, I will proceed with the second change in `ThreadDetailScreen.tsx`.
+
+packages/client/src/screens/ThreadDetailScreen.tsx
+```python
+<<<<<<< SEARCH
+              <Markdown style={markdownStyles as any}>{item.content}</Markdown>
+            </Pressable>
     } catch (error) {
       console.error("Failed to load threads", error);
     } finally {
