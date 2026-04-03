@@ -767,7 +767,16 @@ function ThreadDetailContent() {
           userMessage: Message;
           agentMessage: Message;
         };
-        setMessages((current) => [...current, userMessage, agentMessage]);
+        // Messages will arrive via WS message.new broadcast
+        // Only add locally if WS is definitely dead (no connection at all)
+        const wsAlive = socketRef.current && socketRef.current.readyState === WebSocket.OPEN;
+        if (!wsAlive) {
+          setMessages((current) => {
+            const ids = new Set(current.map(m => m.id));
+            const newMsgs = [userMessage, agentMessage].filter(m => !ids.has(m.id));
+            return newMsgs.length ? [...current, ...newMsgs] : current;
+          });
+        }
       }
       setInput("");
       scrollToBottom();
