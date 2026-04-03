@@ -75,11 +75,11 @@ export default function TextInputModal({
       transparent
       onRequestClose={handleCancel}
     >
-      <Pressable
-        style={s.overlay}
-        onPress={handleCancel}
-        accessibilityRole="button"
-      >
+      <View style={s.overlay}>
+        <Pressable
+          style={s.overlayDismiss}
+          onPress={handleCancel}
+        />
         <View style={s.modalContent}>
           <Text style={s.modalTitle}>{title}</Text>
 
@@ -127,7 +127,7 @@ export default function TextInputModal({
             </Pressable>
           </View>
         </View>
-      </Pressable>
+      </View>
     </Modal>
   );
 }
@@ -140,6 +140,13 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       justifyContent: "center",
       alignItems: "center",
       padding: 20,
+    },
+    overlayDismiss: {
+      position: "absolute" as const,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
     },
     modalContent: {
       width: "100%",
