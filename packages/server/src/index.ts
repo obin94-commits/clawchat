@@ -25,6 +25,17 @@ const wss = new WebSocketServer({ noServer: true });
 const subscriptions = new Map<WebSocket, string>();
 /** Track liveness for heartbeat */
 const clientAlive = new Map<WebSocket, boolean>();
+/** Map<threadId, Set<SSEClient>> */
+const sseClients = new Map<string, Set<SSEClient>>();
+
+interface SSEClient {
+  res: {
+    write: (data: string) => boolean;
+    end: () => void;
+    headersSent: boolean;
+  };
+  abortListener: () => void;
+}
 
 app.use(express.json());
 
@@ -95,6 +106,14 @@ const broadcastToThread = (threadId: string, payload: WsServerEvent) => {
     if (client.readyState !== WebSocket.OPEN) continue;
     if (subscriptions.get(client) !== threadId) continue;
     client.send(serialized);
+  }
+
+  // Also broadcast to SSE clients if it's a message event
+  if (payload.type === "message.new" && payload.payload) {
+    broadcastToSseClients(threadId, {
+      type: "message",
+      data: payload.payload.message,
+    });
   }
 };
 
@@ -581,6 +600,178 @@ app.post("/threads/:id/messages", async (req, res, next) => {
     next(error);
   }
 });
+
+// ─── Webhook endpoint for inter-agent communication ──────────────────────────
+
+/**
+ * POST /threads/:id/messages/webhook
+ * Accept messages from external agents without requiring WS connection.
+ * Body: { content, role, agentId, metadata }
+ * Broadcasts via WS to any connected clients.
+ */
+app.post("/threads/:id/messages/webhook", async (req, res, next) => {
+  try {
+    const threadId = req.params.id;
+    let content =
+      typeof req.body?.content === "string" ? req.body.content.trim() : "";
+    const role = (req.body?.role ?? "USER") as string;
+    const agentId =
+      typeof req.body?.agentId === "string" ? req.body.agentId : null;
+    const metadata = req.body?.metadata
+      ? JSON.stringify(req.body.metadata)
+      : null;
+
+    // Allow empty content for voice messages
+    const isVoiceMessage = metadata && JSON.parse(metadata).type === "voice";
+    if (!content && !isVoiceMessage) {
+      res
+        .status(400)
+        .json({ error: "content is required", code: "MISSING_CONTENT" });
+      return;
+    }
+
+    // Validate content length (max 100KB)
+    if (content.length > 100_000) {
+      res.status(400).json({
+        error: `content exceeds 100KB limit (${content.length} bytes)`,
+        code: "CONTENT_TOO_LONG",
+      });
+      return;
+    }
+    content = content.slice(0, 100_000);
+
+    // Validate role
+    const validRoles = ["USER", "AGENT", "SYSTEM", "TOOL"] as const;
+    if (!validRoles.includes(role as (typeof validRoles)[number])) {
+      res.status(400).json({
+        error: `invalid role: ${role}. Must be one of: ${validRoles.join(", ")}`,
+        code: "INVALID_ROLE",
+      });
+      return;
+    }
+
+    const message = await prisma.message.create({
+      data: { threadId, content, role, displayType: "VISIBLE", metadata },
+    });
+
+    await prisma.thread.update({
+      where: { id: threadId },
+      data: { updatedAt: new Date() },
+    });
+
+    // Broadcast to WS clients
+    broadcastToThread(threadId, {
+      type: "message.new",
+      threadId,
+      payload: { message },
+    } as unknown as WsServerEvent);
+
+    // Broadcast to SSE clients
+    broadcastToSseClients(threadId, { type: "message", data: message });
+
+    if (role === "SYSTEM") {
+      emitTypedEventFromSystemMessage(threadId, content, message.metadata);
+    }
+
+    if (/^\/remember\s+/i.test(content)) {
+      handleRememberCommand(threadId, message.id, content).catch((err) => {
+        logError("remember.webhook", err);
+      });
+    }
+
+    memory
+      .addMemory(content, "robin", {
+        threadId,
+        role,
+        messageId: message.id,
+        agentId,
+      })
+      .catch((err) => {
+        logError("memory.addMemory.webhook", err);
+      });
+
+    res.status(201).json(message);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── SSE subscribe endpoint for inter-agent communication ────────────────────
+
+/**
+ * GET /threads/:id/subscribe
+ * Returns a Server-Sent Events (SSE) stream.
+ * When new messages arrive in the thread, push them as SSE events.
+ */
+app.get("/threads/:id/subscribe", (req, res) => {
+  const threadId = req.params.id;
+
+  // Set SSE headers
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+
+  // Create abort controller for cleanup
+  const abortController = new AbortController();
+
+  // Add abort listener for cleanup when client disconnects
+  const abortListener = () => {
+    cleanupSseClient(threadId, res);
+  };
+  abortController.signal.addEventListener("abort", abortListener);
+
+  // Create SSE client entry
+  const sseClient: SSEClient = {
+    res,
+    abortListener,
+  };
+
+  // Add client to thread's SSE clients
+  if (!sseClients.has(threadId)) {
+    sseClients.set(threadId, new Set());
+  }
+  sseClients.get(threadId)!.add(sseClient);
+
+  // Send initial connection event
+  res.write(
+    `event: connected\ndata: {"threadId":"${threadId}","status":"subscribed"}\n\n`,
+  );
+
+  // Cleanup on client disconnect
+  res.on("close", () => {
+    abortController.abort();
+  });
+});
+
+function cleanupSseClient(threadId: string, res: SSEClient["res"]) {
+  const clients = sseClients.get(threadId);
+  if (clients) {
+    clients.forEach((client) => {
+      if (client.res === res) {
+        clients.delete(client);
+        client.abortListener();
+      }
+    });
+    if (clients.size === 0) {
+      sseClients.delete(threadId);
+    }
+  }
+}
+
+function broadcastToSseClients(threadId: string, event: unknown) {
+  const clients = sseClients.get(threadId);
+  if (!clients) return;
+
+  const data = JSON.stringify(event);
+  const sseData = `data: ${data}\n\n`;
+
+  for (const client of clients) {
+    if (!client.res.headersSent) {
+      client.res.write(sseData);
+    }
+  }
+}
 
 // ─── Cost endpoints ──────────────────────────────────────────────────────────
 
