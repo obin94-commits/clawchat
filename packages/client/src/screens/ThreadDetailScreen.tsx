@@ -1527,6 +1527,55 @@ function ThreadDetailContent() {
         }}
         confirmText="Branch"
       />
+
+      {/* Reaction picker */}
+      <Modal
+        transparent
+        visible={showReactionPicker}
+        animationType="fade"
+        onRequestClose={() => setShowReactionPicker(false)}
+      >
+        <Pressable
+          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)" }}
+          onPress={() => setShowReactionPicker(false)}
+        >
+          <View
+            style={{
+              position: "absolute",
+              bottom: 120,
+              left: "50%",
+              transform: [{ translateX: -80 }],
+              backgroundColor: theme.surface,
+              borderRadius: 24,
+              padding: 12,
+              flexDirection: "row",
+              gap: 12,
+              borderWidth: 1,
+              borderColor: theme.border,
+            }}
+          >
+            {["👍", "❤️", "😂", "🎉", "👀"].map((emoji) => (
+              <Pressable
+                key={emoji}
+                onPress={() => {
+                  void addReaction(emoji);
+                  setShowReactionPicker(false);
+                }}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
+                  backgroundColor: theme.primary,
+                  justifyContent: "center",
+                  alignItems: "center",
+                }}
+              >
+                <Text style={{ fontSize: 20 }}>{emoji}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
