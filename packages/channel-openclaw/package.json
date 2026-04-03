@@ -1,0 +1,15 @@
+{
+  "name": "@clawchat/openclaw-channel",
+  "version": "0.1.0",
+  "description": "OpenClaw channel plugin for ClawChat",
+  "main": "dist/index.js",
+  "types": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npx tsc"
+  },
+  "devDependencies": {
+    "tslib": "^2.6.0",
+    "@types/node": "^20"
+  }
+}

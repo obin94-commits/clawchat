@@ -125,7 +125,11 @@ interface OpenClawChatMessage {
 // ─── ClawChat REST helpers ──────────────────────────────────────────────────
 
 async function clawchatGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${CLAWCHAT_URL}${path}`);
+  const headers = { 'Content-Type': 'application/json' };
+  if (process.env.CLAWCHAT_API_KEY) {
+    headers['Authorization'] = `Bearer ${process.env.CLAWCHAT_API_KEY}`;
+  }
+  const res = await fetch(`${CLAWCHAT_URL}${path}`, { method: 'GET', headers });
   if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
   return res.json() as Promise<T>;
 }
