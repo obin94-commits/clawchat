@@ -976,6 +976,53 @@ function ThreadDetailContent() {
     setMenuMessage(message);
   }, []);
 
+  const addReaction = useCallback(
+    async (emoji: string) => {
+      if (!menuMessage) return;
+
+      try {
+        const existingMetadata = menuMessage.metadata
+          ? JSON.parse(menuMessage.metadata)
+          : {};
+        const reactions = existingMetadata.reactions || {};
+
+        const updatedReactions = {
+          ...reactions,
+          [emoji]: (reactions[emoji] || 0) + 1,
+        };
+
+        const updatedMetadata = {
+          ...existingMetadata,
+          reactions: updatedReactions,
+        };
+
+        // Update the message locally
+        setMessages((current) =>
+          current.map((m) =>
+            m.id === menuMessage.id
+              ? { ...m, metadata: JSON.stringify(updatedMetadata) }
+              : m,
+          ),
+        );
+
+        // TODO: Send reaction to server
+        // await fetchWithAuth(
+        //   `${SERVER_URL}/threads/${threadId}/messages/${menuMessage.id}/react`,
+        //   {
+        //     method: "POST",
+        //     headers: { "Content-Type": "application/json" },
+        //     body: JSON.stringify({ emoji }),
+        //   },
+        //   settings.apiKey,
+        // );
+      } catch (error) {
+        console.error("Failed to add reaction:", error);
+        Alert.alert("Error", "Failed to add reaction");
+      }
+    },
+    [menuMessage, threadId, SERVER_URL, settings.apiKey],
+  );
+
   const handleBranchSubmit = useCallback(
     async (branchTitle: string) => {
       setShowBranchModal(false);
@@ -1290,34 +1337,53 @@ function ThreadDetailContent() {
               : theme.bubbleTextAgent;
 
           return (
-            <Pressable
-              onLongPress={() => {
-                if (item.role !== "SYSTEM" && item.role !== "TOOL") {
-                  setMenuMessage(item);
-                  setMenuVisible(true);
-                }
-              }}
-              style={[
-                s.messageBubble,
-                {
-                  backgroundColor: bubbleBg,
-                  alignSelf: isUser ? "flex-end" : "flex-start",
-                },
-                isGhost && s.ghostBubble,
-              ]}
-            >
-              {!isUser && (
-                <Text
+            <View>
+              <Pressable
+                onLongPress={() => {
+                  if (item.role !== "SYSTEM" && item.role !== "TOOL") {
+                    setMenuMessage(item);
+                    setMenuVisible(true);
+                  }
+                }}
+                style={[
+                  s.messageBubble,
+                  {
+                    backgroundColor: bubbleBg,
+                    alignSelf: isUser ? "flex-end" : "flex-start",
+                  },
+                  isGhost && s.ghostBubble,
+                ]}
+              >
+                {!isUser && (
+                  <Text
+                    style={[
+                      s.messageRole,
+                      { color: isGhost ? theme.textFaint : theme.textMuted },
+                    ]}
+                  >
+                    {item.role}
+                  </Text>
+                )}
+                <Markdown style={markdownStyles as any}>
+                  {item.content}
+                </Markdown>
+              </Pressable>
+              {item.reactions && Object.keys(item.reactions).length > 0 && (
+                <View
                   style={[
-                    s.messageRole,
-                    { color: isGhost ? theme.textFaint : theme.textMuted },
+                    s.reactionsContainer,
+                    { alignSelf: isUser ? "flex-end" : "flex-start" },
                   ]}
                 >
-                  {item.role}
-                </Text>
+                  {Object.entries(item.reactions).map(([emoji, count]) => (
+                    <View key={emoji} style={s.reactionPill}>
+                      <Text style={s.reactionEmoji}>{emoji}</Text>
+                      <Text style={s.reactionCount}>{count as number}</Text>
+                    </View>
+                  ))}
+                </View>
               )}
-              <Markdown style={markdownStyles as any}>{item.content}</Markdown>
-            </Pressable>
+            </View>
           );
         }}
       />
@@ -1888,6 +1954,29 @@ function makeStyles(theme: ReturnType<typeof useTheme>["theme"]) {
       width: 200,
       height: 200,
       resizeMode: "cover",
+    },
+    reactionsContainer: {
+      flexDirection: "row",
+      gap: 4,
+      marginTop: 4,
+      paddingHorizontal: 4,
+    },
+    reactionPill: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: theme.primary,
+      borderRadius: 10,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      gap: 2,
+    },
+    reactionEmoji: {
+      fontSize: 12,
+    },
+    reactionCount: {
+      fontSize: 10,
+      color: theme.textMuted,
+      fontWeight: "600",
     },
   });
 }
